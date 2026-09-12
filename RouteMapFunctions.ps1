@@ -1620,12 +1620,12 @@ function Export-RouteResults {
     foreach ($r in $Results) {
         $routeId   = if ($null -ne $r.Id) { [string]$r.Id } else { '' }
         $routeName = if ($r.Name) { [string]$r.Name } elseif ($r.Nazwa) { [string]$r.Nazwa } else { "Route $routeId" }
-        $startOrig = if ($r.Start) { [string]$r.Start } else { '' }
-        $startGeo  = if ($r.StartGeocoded) { [string]$r.StartGeocoded } elseif ($r.StartGeokodowany) { [string]$r.StartGeokodowany } else { '' }
-        $startStat = if ($r.StartStatus) { [string]$r.StartStatus } else { '' }
-        $endOrig   = if ($r.End) { [string]$r.End } elseif ($r.Koniec) { [string]$r.Koniec } else { '' }
-        $endGeo    = if ($r.EndGeocoded) { [string]$r.EndGeocoded } elseif ($r.KoniecGeokodowany) { [string]$r.KoniecGeokodowany } else { '' }
-        $endStat   = if ($r.EndStatus) { [string]$r.EndStatus } else { '' }
+        $startOrig = if ($r.Start_Original) { [string]$r.Start_Original } elseif ($r.Start) { [string]$r.Start } elseif ($r.StartRaw) { [string]$r.StartRaw } else { '' }
+        $startGeo  = if ($r.Start_Geocoded) { [string]$r.Start_Geocoded } elseif ($r.StartGeocoded) { [string]$r.StartGeocoded } elseif ($r.StartGeokodowany) { [string]$r.StartGeokodowany } else { '' }
+        $startStat = if ($r.Start_Status) { [string]$r.Start_Status } elseif ($r.StartStatus) { [string]$r.StartStatus } else { '' }
+        $endOrig   = if ($r.End_Original) { [string]$r.End_Original } elseif ($r.End) { [string]$r.End } elseif ($r.EndRaw) { [string]$r.EndRaw } elseif ($r.Koniec) { [string]$r.Koniec } else { '' }
+        $endGeo    = if ($r.End_Geocoded) { [string]$r.End_Geocoded } elseif ($r.EndGeocoded) { [string]$r.EndGeocoded } elseif ($r.KoniecGeokodowany) { [string]$r.KoniecGeokodowany } else { '' }
+        $endStat   = if ($r.End_Status) { [string]$r.End_Status } elseif ($r.EndStatus) { [string]$r.EndStatus } else { '' }
         $wpCount   = if ($null -ne $r.WaypointsCount) { [int]$r.WaypointsCount } elseif ($null -ne $r.LiczbaPrzystankow) { [int]$r.LiczbaPrzystankow } else { 0 }
         $rType     = if ($r.RouteType) { [string]$r.RouteType } elseif ($r.TypTrasy) { [string]$r.TypTrasy } else { '' }
         $dist      = if ($null -ne $r.DistanceKm) { $r.DistanceKm } elseif ($null -ne $r.OdlegloscKm) { $r.OdlegloscKm } else { $null }

@@ -339,11 +339,17 @@ $script:BatchCalcAsync = {
                     Id               = if ($r.Id) { $r.Id } else { ($i + 1) }
                     Name             = $routeName
                     Start_Original   = $r.Start
+                    Start            = $r.Start
                     Start_Geocoded   = if ($geoStart) { $geoStart.FormattedAddress } else { $null }
+                    StartGeocoded    = if ($geoStart) { $geoStart.FormattedAddress } else { $null }
                     Start_Status     = $startStatus
+                    StartStatus      = $startStatus
                     End_Original     = $r.End
+                    End              = $r.End
                     End_Geocoded     = if ($geoEnd) { $geoEnd.FormattedAddress } else { $null }
+                    EndGeocoded      = if ($geoEnd) { $geoEnd.FormattedAddress } else { $null }
                     End_Status       = $endStatus
+                    EndStatus        = $endStatus
                     WaypointsCount   = $geoWp.Count
                     RouteType        = $rType
                     DistanceKm       = $null
@@ -351,6 +357,8 @@ $script:BatchCalcAsync = {
                     Status           = "Geocode Error"
                     MapPath          = $null
                     EncodedPolyline  = $null
+                    GoogleMapsUrl    = $null
+                    MapyComUrl       = $null
                     RoutePoints      = $routePointsList
                 })
                 continue
@@ -370,11 +378,17 @@ $script:BatchCalcAsync = {
                     Id               = if ($r.Id) { $r.Id } else { ($i + 1) }
                     Name             = $routeName
                     Start_Original   = $r.Start
+                    Start            = $r.Start
                     Start_Geocoded   = $geoStart.FormattedAddress
+                    StartGeocoded    = $geoStart.FormattedAddress
                     Start_Status     = $startStatus
+                    StartStatus      = $startStatus
                     End_Original     = $r.End
+                    End              = $r.End
                     End_Geocoded     = $geoEnd.FormattedAddress
+                    EndGeocoded      = $geoEnd.FormattedAddress
                     End_Status       = $endStatus
+                    EndStatus        = $endStatus
                     WaypointsCount   = $geoWp.Count
                     RouteType        = $rType
                     DistanceKm       = $null
@@ -382,6 +396,8 @@ $script:BatchCalcAsync = {
                     Status           = "Route Error ($($routeData.Status))"
                     MapPath          = $null
                     EncodedPolyline  = $null
+                    GoogleMapsUrl    = $null
+                    MapyComUrl       = $null
                     RoutePoints      = $routePointsList
                 })
                 continue
@@ -445,15 +461,25 @@ $script:BatchCalcAsync = {
 
             & $wlog "Route $($i + 1)/$total OK: $($routeData.OdlegloscKm) km, $($routeData.CzasMin) min" "OK"
 
+            $gUrl = Get-MapyComUrl -Origin "$($geoStart.Latitude),$($geoStart.Longitude)" `
+                -Destination "$($geoEnd.Latitude),$($geoEnd.Longitude)" `
+                -Waypoints $geoWp
+
             $results.Add([PSCustomObject]@{
                 Id               = if ($r.Id) { $r.Id } else { ($i + 1) }
                 Name             = $routeName
                 Start_Original   = $r.Start
+                Start            = $r.Start
                 Start_Geocoded   = $geoStart.FormattedAddress
+                StartGeocoded    = $geoStart.FormattedAddress
                 Start_Status     = $startStatus
+                StartStatus      = $startStatus
                 End_Original     = $r.End
+                End              = $r.End
                 End_Geocoded     = $geoEnd.FormattedAddress
+                EndGeocoded      = $geoEnd.FormattedAddress
                 End_Status       = $endStatus
+                EndStatus        = $endStatus
                 WaypointsCount   = $geoWp.Count
                 RouteType        = $rType
                 DistanceKm       = $routeData.OdlegloscKm
@@ -461,6 +487,8 @@ $script:BatchCalcAsync = {
                 Status           = 'OK'
                 MapPath          = $(if ($saved) { $mapPath } else { $null })
                 EncodedPolyline  = $routeData.EncodedPolyline
+                GoogleMapsUrl    = $gUrl
+                MapyComUrl       = $gUrl
                 RoutePoints      = $routePointsList
                 AvoidTolls       = $avoidT
                 AvoidHighways    = $avoidH
@@ -473,11 +501,17 @@ $script:BatchCalcAsync = {
                 Id               = if ($r.Id) { $r.Id } else { ($i + 1) }
                 Name             = $routeName
                 Start_Original   = $r.Start
+                Start            = $r.Start
                 Start_Geocoded   = $null
+                StartGeocoded    = $null
                 Start_Status     = "Exception"
+                StartStatus      = "Exception"
                 End_Original     = $r.End
+                End              = $r.End
                 End_Geocoded     = $null
+                EndGeocoded      = $null
                 End_Status       = "Exception"
+                EndStatus        = "Exception"
                 WaypointsCount   = 0
                 RouteType        = $rType
                 DistanceKm       = $null
@@ -485,6 +519,8 @@ $script:BatchCalcAsync = {
                 Status           = "Exception: $($_.Exception.Message)"
                 MapPath          = $null
                 EncodedPolyline  = $null
+                GoogleMapsUrl    = $null
+                MapyComUrl       = $null
                 RoutePoints      = @()
             })
         }
