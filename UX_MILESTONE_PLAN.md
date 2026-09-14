@@ -36,10 +36,14 @@ Elevate usability, workflow ergonomics, and speed for both single-route planning
 - [x] **Map Layer Switcher**: Toggle between Mapy Standard, OpenStreetMap, and Satellite Orthophoto (`baseMaps`) in the interactive Leaflet viewer.
 - [x] **One-Click Package Export**: Export Map PNG, Turn Directions PDF, and GPX track into a designated trip folder in a single click (`btnManualExportPackage`).
 
+### Milestone 6: API Statistics & Clean Settings — [COMPLETE]
+- [x] **Request Call Statistics**: Replaced legacy Google Maps dollar cost estimation with Mapy.com API request counters tracking Session vs. Monthly requests, with live breakdown across Geocoding/Suggest (`/v1/suggest`, `/v1/geocode`), Routes API (`/v1/routing`), and Map Imagery/Tiles.
+- [x] **Billing Period Reset**: Displays active tracking month (`lblApiBillingPeriod`) and single-click month counter reset (`btnResetApiCounters`).
+
 ---
 
 ## Technical Verification & Guardrails
 - **Compatibility**: Verified 100% compliant and operational on Windows PowerShell 5.1 and PowerShell 7+.
 - **Encoding**: Verified strict UTF-8 with BOM (`0xEF, 0xBB, 0xBF`) across all source code, XAML, JSON, and documentation files.
-- **PS2EXE Standalone Executable**: Successfully bundled and compiled into `MapyComRoutes.exe` (815.5 KB), fully self-sufficient with zero external runtime file dependencies.
+- **PS2EXE Standalone Executable**: Successfully bundled and compiled into `MapyComRoutes.exe` (828.5 KB), fully self-sufficient with zero external runtime file dependencies.
 - **Multilingual**: All newly introduced UI keys registered and translated in `localization.json` for English, German, and Polish.
