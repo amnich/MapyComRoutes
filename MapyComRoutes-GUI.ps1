@@ -93,7 +93,9 @@ $window = [System.Windows.Markup.XamlReader]::Load($reader)
 $script:MainWindow = $window
 
 # ── 7. Map Controls into Hashtable ───────────────────────────────────────────
-$Controls = [ordered]@{}
+$Controls = [ordered]@{
+    'Window' = $window
+}
 
 $ctrlNames = @(
     'btnAddWaypoint', 'btnBatchExportGpx', 'btnBatchExportKml', 'btnBatchExportPdf',
@@ -109,7 +111,10 @@ $ctrlNames = @(
     'cmbApiCurrency', 'cmbAppLanguage', 'cmbBatchRouteType', 'cmbDefaultEmission', 'cmbDefaultMapSize',
     'cmbDefaultRouteType', 'cmbEmission', 'cmbSettingsLanguage', 'cmbSettingsTheme',
     'dgBatchInput', 'dgBatchPoints', 'dgBatchResults', 'dgGeocodeValidation', 'gridOverlayConfig', 'imgMapPreview',
-    'lblApiBadge', 'lblApiUsageMonthlyCalls', 'lblApiUsageSessionCalls', 'lblBatchDefaultRouteType', 'lblBatchFileInfo',
+    'lblApiBadge', 'lblApiUsageMonthlyCalls', 'lblApiUsageSessionCalls',
+    'lblApiUsageSessionGeo', 'lblApiUsageMonthlyGeo', 'lblApiUsageSessionRoutes', 'lblApiUsageMonthlyRoutes',
+    'lblApiUsageSessionStatic', 'lblApiUsageMonthlyStatic', 'lblApiBillingPeriod',
+    'lblBatchDefaultRouteType', 'lblBatchFileInfo',
     'lblBatchInputFile', 'lblBatchProgressText', 'lblBatchStats', 'lblColPropAlign', 'lblColPropName',
     'lblColPropOrder', 'lblColPropPanel', 'lblColPropShow', 'lblEstimatedCostMonthly', 'lblFooterStatus',
     'lblFooterVersion', 'lblFreeTierInfo', 'lblGeocodeValidationSummary', 'lblGoogleUrlDisplay', 'lblHeaderDist',
@@ -126,7 +131,20 @@ $ctrlNames = @(
     'txtBatchFilePath', 'txtBatchLog', 'txtHeaderSubtitle', 'txtHeaderTitle', 'txtManualEnd',
     'txtManualName', 'txtManualStart', 'txtNewWaypoint', 'txtSettingsApiKey', 'txtSettingsApiKeyVisible', 'txtSettingsOutputDir',
     'txtSettingsCartoApiKey', 'txtSettingsCartoApiKeyVisible', 'btnToggleCartoKeyVisibility',
-    'lblSettingsCartoApiHeader', 'lblSettingsCartoApiDesc', 'lblSettingsCartoApiLabel'
+    'lblSettingsCartoApiHeader', 'lblSettingsCartoApiDesc', 'lblSettingsCartoApiLabel',
+    'cmbRecentRoutes', 'lblManualRecentRoutes', 'btnSwapEndpoints', 'btnResetManualForm',
+    'lblCopyFeedback', 'btnToggleInputPanel', 'colManualInput', 'scrollManualInput',
+    'btnManualExportPackage', 'borderBatchInputCard', 'lblBatchDropHint',
+    'txtBatchSearch', 'cmbBatchStatusFilter', 'btnRetryFailedBatch',
+    'pnlToastContainer', 'txtToastIcon', 'txtToastTitle', 'txtToastMessage',
+    'btnToastAction', 'btnToastActionFolder', 'btnToastClose',
+    'badgeStartGeocode', 'badgeEndGeocode',
+    'popSuggestStart', 'lstSuggestStart',
+    'popSuggestEnd', 'lstSuggestEnd',
+    'popSuggestWp', 'lstSuggestWp',
+    'drawerLog', 'txtLogDrawer', 'btnToggleLogDrawer',
+    'btnCloseLogDrawer', 'btnClearLogDrawer', 'btnCopyLogDrawer',
+    'rbLogAll', 'rbLogInfo', 'rbLogWarn', 'rbLogError'
 )
 
 foreach ($n in $ctrlNames) {
@@ -155,6 +173,33 @@ foreach ($k in $Controls.Keys) {
 Register-UiSettingsTabEvents -Controls $Controls -Window $window
 Register-UiManualTabEvents   -Controls $Controls -Window $window
 Register-UiBatchTabEvents    -Controls $Controls -Window $window
+
+# Wire Toast Notification Buttons
+if ($Controls.btnToastClose) {
+    $Controls.btnToastClose.Add_Click({
+        if ($Controls.pnlToastContainer) { $Controls.pnlToastContainer.Visibility = [System.Windows.Visibility]::Collapsed }
+        if ($script:ToastTimer) { try { $script:ToastTimer.Stop() } catch { } }
+    })
+}
+if ($Controls.btnToastAction) {
+    $Controls.btnToastAction.Add_Click({
+        if ($Controls.btnToastAction.Tag -and (Test-Path $Controls.btnToastAction.Tag)) {
+            Start-Process $Controls.btnToastAction.Tag
+            if ($Controls.pnlToastContainer) { $Controls.pnlToastContainer.Visibility = [System.Windows.Visibility]::Collapsed }
+            if ($script:ToastTimer) { try { $script:ToastTimer.Stop() } catch { } }
+        }
+    })
+}
+if ($Controls.btnToastActionFolder) {
+    $Controls.btnToastActionFolder.Add_Click({
+        if ($Controls.btnToastActionFolder.Tag -and (Test-Path $Controls.btnToastActionFolder.Tag)) {
+            Start-Process explorer.exe $Controls.btnToastActionFolder.Tag
+            if ($Controls.pnlToastContainer) { $Controls.pnlToastContainer.Visibility = [System.Windows.Visibility]::Collapsed }
+            if ($script:ToastTimer) { try { $script:ToastTimer.Stop() } catch { } }
+        }
+    })
+}
+
 
 # ── 9. Populate Saved Settings into Controls ─────────────────────────────────
 if ($script:AppConfig.ApiKey) {

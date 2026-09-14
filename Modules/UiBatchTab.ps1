@@ -244,12 +244,12 @@ function Sync-BatchPreviewToRoutes {
         }
     }
     else {
-        # RouteList mode
+        # RouteList mode - match by Id
         $routes = @($script:LoadedBatchData.Routes)
-        for ($i = 0; $i -lt [math]::Min($routes.Count, $items.Count); $i++) {
-            $gridItem = $items[$i]
-            if ($gridItem -and -not [string]::IsNullOrWhiteSpace($gridItem.Name)) {
-                $routes[$i].Name = $gridItem.Name.Trim()
+        foreach ($r in $routes) {
+            $matchingItem = @($items | Where-Object { $_.Id -eq $r.Id }) | Select-Object -First 1
+            if ($matchingItem -and -not [string]::IsNullOrWhiteSpace($matchingItem.Name)) {
+                $r.Name = $matchingItem.Name.Trim()
             }
         }
     }
@@ -303,6 +303,11 @@ function Register-UiBatchTabEvents {
         'cmbDefaultRouteType'         = $Controls.cmbDefaultRouteType
         'cmbDefaultEmission'          = $Controls.cmbDefaultEmission
         'tabMain'                     = $Controls.tabMain
+        'borderBatchInputCard'        = $Controls.borderBatchInputCard
+        'lblBatchDropHint'            = $Controls.lblBatchDropHint
+        'txtBatchSearch'              = $Controls.txtBatchSearch
+        'cmbBatchStatusFilter'        = $Controls.cmbBatchStatusFilter
+        'btnRetryFailedBatch'         = $Controls.btnRetryFailedBatch
     }
 
     foreach ($entry in $aliases.GetEnumerator()) {
@@ -343,6 +348,11 @@ function Register-UiBatchTabEvents {
     $cmbDefaultRouteType         = $aliases['cmbDefaultRouteType']
     $cmbDefaultEmission          = $aliases['cmbDefaultEmission']
     $tabMain                     = $aliases['tabMain']
+    $borderBatchInputCard        = $aliases['borderBatchInputCard']
+    $lblBatchDropHint            = $aliases['lblBatchDropHint']
+    $txtBatchSearch              = $aliases['txtBatchSearch']
+    $cmbBatchStatusFilter        = $aliases['cmbBatchStatusFilter']
+    $btnRetryFailedBatch         = $aliases['btnRetryFailedBatch']
 
     $btnBrowseBatchFile.Add_Click({
         $initDir = $null
@@ -361,6 +371,79 @@ function Register-UiBatchTabEvents {
             Load-BatchFilePreviewInternal -Path $txtBatchFilePath.Text.Trim()
         }
     })
+
+    # Milestone 3: File Drag and Drop on Batch Card
+    if ($borderBatchInputCard) {
+        $borderBatchInputCard.Add_PreviewDragOver({
+            param($s, $e)
+            if ($e.Data.GetDataPresent([System.Windows.DataFormats]::FileDrop)) {
+                $e.Effects = [System.Windows.DragDropEffects]::Copy
+                $e.Handled = $true
+            }
+        })
+        $borderBatchInputCard.Add_Drop({
+            param($s, $e)
+            if ($e.Data.GetDataPresent([System.Windows.DataFormats]::FileDrop)) {
+                $files = $e.Data.GetData([System.Windows.DataFormats]::FileDrop)
+                if ($files -and $files.Count -gt 0) {
+                    $droppedFile = [string]$files[0]
+                    if (Test-Path $droppedFile) {
+                        $txtBatchFilePath.Text = $droppedFile
+                        Load-BatchFilePreviewInternal -Path $droppedFile
+                    }
+                }
+            }
+        })
+    }
+
+    # Milestone 3: Results Filtering and Search
+    $FilterBatchResults = {
+        if (-not $dgBatchResults -or -not $dgBatchResults.ItemsSource) { return }
+        $view = [System.Windows.Data.CollectionViewSource]::GetDefaultView($dgBatchResults.ItemsSource)
+        if (-not $view) { return }
+        $query = if ($txtBatchSearch -and $txtBatchSearch.Text) { $txtBatchSearch.Text.Trim().ToLower() } else { '' }
+        $statusFilter = if ($cmbBatchStatusFilter -and $cmbBatchStatusFilter.SelectedItem) { [string]$cmbBatchStatusFilter.SelectedItem.Tag } else { 'ALL' }
+
+        $view.Filter = [Predicate[object]]{
+            param($item)
+            if (-not $item) { return $false }
+
+            if ($statusFilter -eq 'OK' -and $item.Status -ne 'OK') { return $false }
+            if ($statusFilter -eq 'ERROR' -and $item.Status -eq 'OK') { return $false }
+
+            if (-not [string]::IsNullOrWhiteSpace($query)) {
+                $nameStr = if ($item.Name) { [string]$item.Name.ToLower() } else { '' }
+                $startStr = if ($item.Start_Original) { [string]$item.Start_Original.ToLower() } else { '' }
+                $endStr = if ($item.End_Original) { [string]$item.End_Original.ToLower() } else { '' }
+                $statusStr = if ($item.Status) { [string]$item.Status.ToLower() } else { '' }
+                $match = ($nameStr -like "*$query*") -or ($startStr -like "*$query*") -or ($endStr -like "*$query*") -or ($statusStr -like "*$query*")
+                if (-not $match) { return $false }
+            }
+            return $true
+        }
+    }
+    if ($txtBatchSearch) { $txtBatchSearch.Add_TextChanged({ & $FilterBatchResults }) }
+    if ($cmbBatchStatusFilter) { $cmbBatchStatusFilter.Add_SelectionChanged({ & $FilterBatchResults }) }
+
+    # Milestone 3: Retry Failed Routes
+    if ($btnRetryFailedBatch) {
+        $btnRetryFailedBatch.Add_Click({
+            if ($script:BatchWorkerRunning) { return }
+            $successfulIds = @($script:BatchResultsList | Where-Object { $_.Status -eq 'OK' } | ForEach-Object { $_.Id })
+            $failedRoutes = @($script:LoadedBatchData.Routes | Where-Object { $_.Id -notin $successfulIds })
+            if ($failedRoutes.Count -eq 0 -or $null -eq $script:LoadedBatchData) { return }
+
+            if (-not $script:LoadedBatchData.AllRoutes) {
+                $script:LoadedBatchData | Add-Member -NotePropertyName 'AllRoutes' -NotePropertyValue @($script:LoadedBatchData.Routes) -Force
+            }
+            $script:IsBatchRetry = $true
+            $script:BatchPriorSuccess = @($script:BatchResultsList | Where-Object { $_.Status -eq 'OK' })
+
+            $script:LoadedBatchData.Routes = $failedRoutes
+            Write-BatchLog "Retrying $($failedRoutes.Count) incomplete/failed routes: $(($failedRoutes.Id) -join ', ')" "WARN"
+            $btnStartBatch.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent))
+        })
+    }
 
     if ($dgBatchInput) {
         $dgBatchInput.Add_CellEditEnding({
@@ -577,14 +660,20 @@ function Register-UiBatchTabEvents {
         $btnBrowseBatchFile.IsEnabled = $false
         $btnReloadBatchFile.IsEnabled = $false
         $btnValidateBatchGeocoding.IsEnabled = $false
-
-        $script:BatchResultsList.Clear()
-        $dgBatchResults.ItemsSource = $null
+        if (-not $script:IsBatchRetry) {
+            if ($script:LoadedBatchData.AllRoutes) {
+                $script:LoadedBatchData.Routes = @($script:LoadedBatchData.AllRoutes)
+            }
+            $script:BatchPriorSuccess = $null
+            $script:BatchResultsList.Clear()
+            $dgBatchResults.ItemsSource = $null
+        }
         if ($dgBatchPoints) { $dgBatchPoints.ItemsSource = $null }
         $pbBatchProgress.Value = 0
         $lblBatchProgressText.Text = "Starting batch processing (0 / $($script:LoadedBatchData.Routes.Count))..."
         $lblBatchStats.Text = "Success: 0 | Errors: 0"
 
+        $script:BatchStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         Write-BatchLog "=== Starting batch processing ($($script:LoadedBatchData.Routes.Count) routes) ===" "INFO"
         if ($tabBatchSub) { $tabBatchSub.SelectedIndex = 4 } # Switch to Activity Log
 
@@ -647,10 +736,21 @@ function Register-UiBatchTabEvents {
             $tot  = $localSyncState.TotalCount
             $pct  = if ($tot -gt 0) { [math]::Min(100, [math]::Round(($curr / $tot) * 100, 0)) } else { 0 }
             $pbBatchProgress.Value = $pct
-            $lblBatchProgressText.Text = "Processing: $curr / $tot ($pct%)"
+
+            # Milestone 3: Live Throughput & Remaining Duration ETA
+            if ($script:BatchStopwatch -and $curr -gt 0) {
+                $elapsedSec = [double]$script:BatchStopwatch.ElapsedMilliseconds / 1000.0
+                $secPerRoute = $elapsedSec / $curr
+                $remainingSec = [math]::Max(0, [math]::Round(($tot - $curr) * $secPerRoute))
+                $etaStr = if ($remainingSec -ge 60) { "$([math]::Floor($remainingSec / 60))m $($remainingSec % 60)s" } else { "$($remainingSec)s" }
+                $lblBatchProgressText.Text = "Route $curr of $tot ($pct%) • ~$etaStr remaining • $([math]::Round($secPerRoute, 1))s/route"
+            } else {
+                $lblBatchProgressText.Text = "Processing: $curr / $tot ($pct%)"
+            }
 
             if ($localBatchHandle -and $localBatchHandle.IsCompleted) {
                 $script:ActiveBatchTimer.Stop()
+                if ($script:BatchStopwatch) { try { $script:BatchStopwatch.Stop() } catch { } }
                 $btnStartBatch.IsEnabled = $true
                 $btnStopBatch.IsEnabled = $false
                 $btnBrowseBatchFile.IsEnabled = $true
@@ -672,8 +772,29 @@ function Register-UiBatchTabEvents {
                 try {
                     $res = $localBatchPs.EndInvoke($localBatchHandle)
                     $batchObj = $res[0]
-                    $script:BatchResultsList = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    foreach ($item in @($batchObj.Results)) { $script:BatchResultsList.Add($item) }
+                    $newResults = @($batchObj.Results)
+
+                    if ($script:IsBatchRetry -and $script:BatchPriorSuccess) {
+                        $mergedList = [System.Collections.Generic.List[PSCustomObject]]::new()
+                        $retriedIds = @($newResults | ForEach-Object { $_.Id })
+                        foreach ($prior in $script:BatchPriorSuccess) {
+                            if ($prior.Id -notin $retriedIds) {
+                                $mergedList.Add($prior)
+                            }
+                        }
+                        foreach ($retried in $newResults) {
+                            $mergedList.Add($retried)
+                        }
+                        if ($script:LoadedBatchData.AllRoutes) {
+                            $script:LoadedBatchData.Routes = @($script:LoadedBatchData.AllRoutes)
+                        }
+                        $script:BatchResultsList = $mergedList
+                        $script:IsBatchRetry = $false
+                        $script:BatchPriorSuccess = $null
+                    } else {
+                        $script:BatchResultsList = [System.Collections.Generic.List[PSCustomObject]]::new()
+                        foreach ($item in $newResults) { $script:BatchResultsList.Add($item) }
+                    }
                     $dgBatchResults.ItemsSource = $script:BatchResultsList
 
                     if ($batchObj.ApiUsage) {
@@ -709,6 +830,18 @@ function Register-UiBatchTabEvents {
                     $statusMsg = if ($localSyncState.CancelRequested) { 'Stopped by user.' } else { 'Completed successfully.' }
                     $lblBatchProgressText.Text = $statusMsg
                     $lblFooter.Text = "Processing complete: $($script:BatchResultsList.Count) routes processed."
+
+                    # Milestone 3: Check failed routes for retry button and toast
+                    $failedItems = @($script:BatchResultsList | Where-Object { $_.Status -ne 'OK' })
+                    if ($btnRetryFailedBatch) {
+                        $btnRetryFailedBatch.IsEnabled = ($failedItems.Count -gt 0)
+                    }
+
+                    if ($failedItems.Count -gt 0) {
+                        Show-AppToastNotification -Title "Batch Finished" -Message "Processed $($script:BatchResultsList.Count) routes ($($failedItems.Count) had issues)." -Type Warning
+                    } else {
+                        Show-AppToastNotification -Title "Batch Complete" -Message "All $($script:BatchResultsList.Count) routes processed successfully!" -Type Success
+                    }
 
                     if ($script:BatchResultsList.Count -gt 0 -and $tabBatchSub) {
                         $tabBatchSub.SelectedIndex = 2 # Switch to Calculation Results
@@ -749,10 +882,10 @@ function Register-UiBatchTabEvents {
         }
     })
 
-    # Feature 5.O: Export Batch PDF Report
+    # Export Batch PDF Report
     $btnBatchExportPdf.Add_Click({
         if ($script:BatchResultsList.Count -eq 0) {
-            [System.Windows.MessageBox]::Show("No calculation results available to export.", "Export PDF", "OK", "Information")
+            Show-AppToastNotification -Title "Export PDF" -Message "No calculation results available to export." -Type Info
             return
         }
         $dlg = [System.Windows.Forms.SaveFileDialog]::new()
@@ -763,20 +896,19 @@ function Register-UiBatchTabEvents {
             try {
                 $srcLeaf = if (-not [string]::IsNullOrWhiteSpace($txtBatchFilePath.Text)) { Split-Path $txtBatchFilePath.Text.Trim() -Leaf } else { 'Batch_Input' }
                 Export-BatchPdfReport -OutputPath $dlg.FileName -Routes $script:BatchResultsList -SourceFileName $srcLeaf
-                $ask = [System.Windows.MessageBox]::Show("Batch PDF report created successfully!`n$($dlg.FileName)`n`nDo you want to open it now?", "PDF Export", "YesNo", "Information")
-                if ($ask -eq [System.Windows.MessageBoxResult]::Yes) { Start-Process $dlg.FileName }
+                Show-AppToastNotification -Title "Batch PDF Exported" -Message "Report saved: $($dlg.FileName)" -Type Success -ActionFile $dlg.FileName
             }
             catch {
-                [System.Windows.MessageBox]::Show("Failed to export batch PDF report:`n$($_.Exception.Message)", "Error", "OK", "Error")
+                Show-AppToastNotification -Title "Export Error" -Message "Failed to export batch PDF: $($_.Exception.Message)" -Type Error
             }
         }
     })
 
-    # Feature 5.P: Export Batch GPX
+    # Export Batch GPX
     $btnBatchExportGpx.Add_Click({
         $validRoutes = @($script:BatchResultsList) | Where-Object { $_.EncodedPolyline }
         if ($validRoutes.Count -eq 0) {
-            [System.Windows.MessageBox]::Show("No routes with valid polyline data found.", "Export GPX", "OK", "Information")
+            Show-AppToastNotification -Title "Export GPX" -Message "No routes with valid polyline data found." -Type Info
             return
         }
         $fbd = [System.Windows.Forms.FolderBrowserDialog]::new()
@@ -790,15 +922,15 @@ function Register-UiBatchTabEvents {
                 Export-RouteGpx -OutputPath $gpxFile -RouteName $r.Name -EncodedPolyline $r.EncodedPolyline -DistanceKm $r.DistanceKm -DurationMin $r.DurationMin | Out-Null
                 $count++
             }
-            [System.Windows.MessageBox]::Show("Exported $count GPX track files to:`n$exportDir", "GPX Export", "OK", "Information")
+            Show-AppToastNotification -Title "GPX Exported" -Message "Exported $count GPX track files." -Type Success -ActionFolder $exportDir
         }
     })
 
-    # Feature 5.P: Export Batch KML
+    # Export Batch KML
     $btnBatchExportKml.Add_Click({
         $validRoutes = @($script:BatchResultsList) | Where-Object { $_.EncodedPolyline }
         if ($validRoutes.Count -eq 0) {
-            [System.Windows.MessageBox]::Show("No routes with valid polyline data found.", "Export KML", "OK", "Information")
+            Show-AppToastNotification -Title "Export KML" -Message "No routes with valid polyline data found." -Type Info
             return
         }
         $fbd = [System.Windows.Forms.FolderBrowserDialog]::new()
@@ -812,11 +944,11 @@ function Register-UiBatchTabEvents {
                 Export-RouteKml -OutputPath $kmlFile -RouteName $r.Name -EncodedPolyline $r.EncodedPolyline -DistanceKm $r.DistanceKm -DurationMin $r.DurationMin | Out-Null
                 $count++
             }
-            [System.Windows.MessageBox]::Show("Exported $count KML track files to:`n$exportDir", "KML Export", "OK", "Information")
+            Show-AppToastNotification -Title "KML Exported" -Message "Exported $count KML track files." -Type Success -ActionFolder $exportDir
         }
     })
 
-    # Existing Standard Exports (Excel, CSV, JSON)
+    # Standard Exports (Excel, CSV, JSON)
     $btnExportExcel.Add_Click({
         if ($script:BatchResultsList.Count -eq 0) { return }
         $dlg = [System.Windows.Forms.SaveFileDialog]::new()
@@ -824,7 +956,7 @@ function Register-UiBatchTabEvents {
         $dlg.FileName = "Batch_Results_$((Get-Date).ToString('yyyyMMdd_HHmm')).xlsx"
         if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
             Export-RouteResults -Results $script:BatchResultsList -OutputPath $dlg.FileName -Format 'Excel'
-            [System.Windows.MessageBox]::Show("Exported to $($dlg.FileName)", "Excel Export", "OK", "Information")
+            Show-AppToastNotification -Title "Excel Exported" -Message "Results saved: $($dlg.FileName)" -Type Success -ActionFile $dlg.FileName
         }
     })
 
@@ -835,7 +967,7 @@ function Register-UiBatchTabEvents {
         $dlg.FileName = "Batch_Results_$((Get-Date).ToString('yyyyMMdd_HHmm')).csv"
         if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
             Export-RouteResults -Results $script:BatchResultsList -OutputPath $dlg.FileName -Format 'CSV'
-            [System.Windows.MessageBox]::Show("Exported to $($dlg.FileName)", "CSV Export", "OK", "Information")
+            Show-AppToastNotification -Title "CSV Exported" -Message "Results saved: $($dlg.FileName)" -Type Success -ActionFile $dlg.FileName
         }
     })
 
@@ -846,7 +978,7 @@ function Register-UiBatchTabEvents {
         $dlg.FileName = "Batch_Results_$((Get-Date).ToString('yyyyMMdd_HHmm')).json"
         if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
             Export-RouteResults -Results $script:BatchResultsList -OutputPath $dlg.FileName -Format 'JSON'
-            [System.Windows.MessageBox]::Show("Exported to $($dlg.FileName)", "JSON Export", "OK", "Information")
+            Show-AppToastNotification -Title "JSON Exported" -Message "Results saved: $($dlg.FileName)" -Type Success -ActionFile $dlg.FileName
         }
     })
 }

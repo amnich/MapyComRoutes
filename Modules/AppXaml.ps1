@@ -325,6 +325,7 @@ function Get-AppXaml {
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <!-- Header -->
@@ -357,18 +358,31 @@ function Get-AppXaml {
             <TabItem Name="tabItemManual" Header="📍 Manual Route">
                 <Grid Margin="0,10,0,0">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="430" MinWidth="370"/>
+                        <ColumnDefinition Name="colManualInput" Width="430" MinWidth="0"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
 
-                    <ScrollViewer VerticalScrollBarVisibility="Auto" Grid.Column="0" Margin="0,0,10,0">
+                    <ScrollViewer Name="scrollManualInput" VerticalScrollBarVisibility="Auto" Grid.Column="0" Margin="0,0,10,0">
                         <StackPanel>
                             <!-- Route Points Card -->
                             <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,0,12">
                                 <StackPanel>
                                     <TextBlock Name="lblManualRoutePointsHeader" Text="Route Points" FontSize="15" FontWeight="Bold" Foreground="{DynamicResource TextPrimary}" Margin="0,0,0,10"/>
 
-                                    <TextBlock Name="lblManualOrigin" Text="Origin (Start / A):" FontSize="12" Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,4"/>
+                                    <!-- Recent Routes Quick Picker (Milestone 1) -->
+                                    <Grid Margin="0,0,0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Name="lblManualRecentRoutes" Text="Recent Routes:" FontSize="11" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                        <ComboBox Name="cmbRecentRoutes" Grid.Column="1" Height="26" FontSize="11" ToolTip="Quickly restore a previously calculated route"/>
+                                    </Grid>
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                        <TextBlock Name="lblManualOrigin" Text="Origin (Start / A):" FontSize="12" Foreground="{DynamicResource TextSecondary}"/>
+                                        <TextBlock Name="badgeStartGeocode" Text="" FontSize="11" FontWeight="SemiBold" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                    </StackPanel>
                                     <Grid Margin="0,0,0,10">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
@@ -376,6 +390,14 @@ function Get-AppXaml {
                                         </Grid.ColumnDefinitions>
                                         <TextBox Name="txtManualStart" Text="Warszawa, Plac Defilad 1"/>
                                         <Button Name="btnClearManualStart" Grid.Column="1" Content="✕" Background="{DynamicResource BtnSecondaryBg}" Foreground="{DynamicResource BtnSecondaryFg}" Padding="8,6" Margin="4,0,0,0" ToolTip="Clear"/>
+                                        <Popup Name="popSuggestStart" PlacementTarget="{Binding ElementName=txtManualStart}" Placement="Bottom" StaysOpen="False" AllowsTransparency="True">
+                                            <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="1" CornerRadius="6" Padding="4" MaxHeight="190" Width="360">
+                                                <Border.Effect>
+                                                    <DropShadowEffect BlurRadius="12" ShadowDepth="3" Opacity="0.45" Color="#000000"/>
+                                                </Border.Effect>
+                                                <ListBox Name="lstSuggestStart" Background="Transparent" BorderThickness="0" Foreground="{DynamicResource TextPrimary}"/>
+                                            </Border>
+                                        </Popup>
                                     </Grid>
 
                                     <TextBlock Name="lblManualWaypoints" Text="Intermediate Stops (optional up to 25):" FontSize="12" Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,4"/>
@@ -386,6 +408,14 @@ function Get-AppXaml {
                                         </Grid.ColumnDefinitions>
                                         <TextBox Name="txtNewWaypoint" ToolTip="Enter waypoint address and click Add"/>
                                         <Button Name="btnAddWaypoint" Grid.Column="1" Content="➕ Add" Background="#10B981" Margin="4,0,0,0"/>
+                                        <Popup Name="popSuggestWp" PlacementTarget="{Binding ElementName=txtNewWaypoint}" Placement="Bottom" StaysOpen="False" AllowsTransparency="True">
+                                            <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="1" CornerRadius="6" Padding="4" MaxHeight="190" Width="360">
+                                                <Border.Effect>
+                                                    <DropShadowEffect BlurRadius="12" ShadowDepth="3" Opacity="0.45" Color="#000000"/>
+                                                </Border.Effect>
+                                                <ListBox Name="lstSuggestWp" Background="Transparent" BorderThickness="0" Foreground="{DynamicResource TextPrimary}"/>
+                                            </Border>
+                                        </Popup>
                                     </Grid>
 
                                     <ListBox Name="lstWaypoints" Height="100" Margin="0,0,0,6"/>
@@ -393,16 +423,29 @@ function Get-AppXaml {
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="*"/>
                                         </Grid.ColumnDefinitions>
-                                        <Button Name="btnWpUp" Content="▲ Up" Background="{DynamicResource BtnSecondaryBg}" Foreground="{DynamicResource BtnSecondaryFg}" Margin="0,0,2,0" Padding="4,4" FontSize="11"/>
-                                        <Button Name="btnWpDown" Grid.Column="1" Content="▼ Down" Background="{DynamicResource BtnSecondaryBg}" Foreground="{DynamicResource BtnSecondaryFg}" Margin="2,0,2,0" Padding="4,4" FontSize="11"/>
-                                        <Button Name="btnWpRemove" Grid.Column="2" Content="✕ Remove" Background="#EF4444" Margin="2,0,2,0" Padding="4,4" FontSize="11"/>
-                                        <Button Name="btnWpClear" Grid.Column="3" Content="🗑 Clear" Background="{DynamicResource BtnSecondaryBg}" Foreground="{DynamicResource BtnSecondaryFg}" Margin="2,0,0,0" Padding="4,4" FontSize="11"/>
+                                        <Grid Grid.Column="0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Button Name="btnWpUp" Content="▲ Up" Background="{DynamicResource BtnSecondaryBg}" Foreground="{DynamicResource BtnSecondaryFg}" Margin="0,0,2,0" Padding="4,4" FontSize="11"/>
+                                            <Button Name="btnWpDown" Grid.Column="1" Content="▼ Down" Background="{DynamicResource BtnSecondaryBg}" Foreground="{DynamicResource BtnSecondaryFg}" Margin="2,0,2,0" Padding="4,4" FontSize="11"/>
+                                        </Grid>
+                                        <Grid Grid.Column="1">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Button Name="btnWpRemove" Content="✕ Remove" Background="#EF4444" Margin="2,0,2,0" Padding="4,4" FontSize="11"/>
+                                            <Button Name="btnWpClear" Grid.Column="1" Content="🗑 Clear" Background="{DynamicResource BtnSecondaryBg}" Foreground="{DynamicResource BtnSecondaryFg}" Margin="2,0,0,0" Padding="4,4" FontSize="11"/>
+                                        </Grid>
                                     </Grid>
 
-                                    <TextBlock Name="lblManualDestination" Text="Destination (End / B):" FontSize="12" Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,4"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                        <TextBlock Name="lblManualDestination" Text="Destination (End / B):" FontSize="12" Foreground="{DynamicResource TextSecondary}"/>
+                                        <TextBlock Name="badgeEndGeocode" Text="" FontSize="11" FontWeight="SemiBold" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                    </StackPanel>
                                     <Grid Margin="0,0,0,6">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
@@ -410,6 +453,24 @@ function Get-AppXaml {
                                         </Grid.ColumnDefinitions>
                                         <TextBox Name="txtManualEnd" Text="Kraków, Rynek Główny 1"/>
                                         <Button Name="btnClearManualEnd" Grid.Column="1" Content="✕" Background="{DynamicResource BtnSecondaryBg}" Foreground="{DynamicResource BtnSecondaryFg}" Padding="8,6" Margin="4,0,0,0" ToolTip="Clear"/>
+                                        <Popup Name="popSuggestEnd" PlacementTarget="{Binding ElementName=txtManualEnd}" Placement="Bottom" StaysOpen="False" AllowsTransparency="True">
+                                            <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="1" CornerRadius="6" Padding="4" MaxHeight="190" Width="360">
+                                                <Border.Effect>
+                                                    <DropShadowEffect BlurRadius="12" ShadowDepth="3" Opacity="0.45" Color="#000000"/>
+                                                </Border.Effect>
+                                                <ListBox Name="lstSuggestEnd" Background="Transparent" BorderThickness="0" Foreground="{DynamicResource TextPrimary}"/>
+                                            </Border>
+                                        </Popup>
+                                    </Grid>
+
+                                    <!-- Return Trip & Reset Quick Actions (Milestone 1) -->
+                                    <Grid Margin="0,2,0,8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Button Name="btnSwapEndpoints" Content="⇄ Swap / Return Trip" Background="{DynamicResource BtnSecondaryBg}" Foreground="{DynamicResource BtnSecondaryFg}" Padding="6,5" FontSize="11" Margin="0,0,4,0" ToolTip="Swap Origin and Destination (reverses route for return trip)"/>
+                                        <Button Name="btnResetManualForm" Grid.Column="1" Content="🔄 Clear Form" Background="{DynamicResource BtnSecondaryBg}" Foreground="{DynamicResource BtnSecondaryFg}" Padding="6,5" FontSize="11" Margin="4,0,0,0" ToolTip="Clear origin, destination, and all waypoints"/>
                                     </Grid>
 
                                     <TextBlock Name="lblManualRouteName" Text="Route Name / Description:" FontSize="12" Foreground="{DynamicResource TextSecondary}" Margin="0,4,0,4"/>
@@ -475,27 +536,29 @@ function Get-AppXaml {
 
                                 <StackPanel Grid.Column="0">
                                     <TextBlock Name="lblHeaderDist" Text="DISTANCE" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource TextSecondary}"/>
-                                    <TextBlock Name="lblManualDist" Text="— km" FontSize="20" FontWeight="Bold" Foreground="#10B981"/>
+                                    <TextBlock Name="lblManualDist" Text="— km" FontSize="20" FontWeight="Bold" Foreground="#10B981" Cursor="Hand" ToolTip="Click to copy distance to clipboard"/>
                                 </StackPanel>
 
                                 <StackPanel Grid.Column="1">
                                     <TextBlock Name="lblHeaderDur" Text="DURATION" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource TextSecondary}"/>
-                                    <TextBlock Name="lblManualTime" Text="— min" FontSize="20" FontWeight="Bold" Foreground="#F59E0B"/>
+                                    <TextBlock Name="lblManualTime" Text="— min" FontSize="20" FontWeight="Bold" Foreground="#F59E0B" Cursor="Hand" ToolTip="Click to copy duration to clipboard"/>
                                 </StackPanel>
 
                                 <StackPanel Grid.Column="2">
                                     <TextBlock Name="lblHeaderType" Text="ROUTE TYPE" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource TextSecondary}"/>
-                                    <TextBlock Name="lblManualType" Text="Fastest" FontSize="16" FontWeight="SemiBold" Foreground="#38BDF8"/>
+                                    <TextBlock Name="lblManualType" Text="Fastest" FontSize="16" FontWeight="SemiBold" Foreground="#38BDF8" Cursor="Hand" ToolTip="Click to copy route type to clipboard"/>
                                 </StackPanel>
 
                                 <StackPanel Grid.Column="3" VerticalAlignment="Center">
                                     <TextBlock Name="lblManualStatus" Text="Idle" FontSize="12" Foreground="{DynamicResource TextSecondary}" HorizontalAlignment="Right"/>
+                                    <TextBlock Name="lblCopyFeedback" Text="✓ Copied!" FontSize="12" Foreground="#10B981" FontWeight="Bold" Visibility="Collapsed" HorizontalAlignment="Right" Margin="0,2,0,0"/>
                                 </StackPanel>
                             </Grid>
                         </Border>
 
-                        <!-- Map View Mode Selector (Feature 4.K) -->
+                        <!-- Map View Mode Selector (Feature 4.K & Milestone 5) -->
                         <Grid Grid.Row="1" Margin="0,0,0,6">
+                            <Button Name="btnToggleInputPanel" Content="◀ Full Map" Background="{DynamicResource BtnSecondaryBg}" Foreground="{DynamicResource BtnSecondaryFg}" HorizontalAlignment="Left" Padding="8,3" FontSize="11" ToolTip="Toggle full-screen map preview"/>
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                 <RadioButton Name="rbViewInteractive" Content="🗺️ Interactive Map" GroupName="ManualMapMode" IsChecked="True" Foreground="{DynamicResource TextPrimary}" FontSize="12" Margin="0,0,12,0"/>
                                 <RadioButton Name="rbViewStatic" Content="🖼️ Static Map (PNG)" GroupName="ManualMapMode" Foreground="{DynamicResource TextPrimary}" FontSize="12"/>
@@ -512,15 +575,16 @@ function Get-AppXaml {
                             </Grid>
                         </Border>
 
-                        <!-- Action Bar (PDF, GPX, KML, Google Maps) -->
+                        <!-- Action Bar (PDF, GPX, KML, All Packages, Mapy.com) -->
                         <Border Grid.Row="3" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="1" CornerRadius="8" Padding="10">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
-                                <TextBlock Name="lblGoogleUrlDisplay" Text="No generated link" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="0,0,10,0"/>
+                                <TextBlock Name="lblGoogleUrlDisplay" Text="No generated link" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="0,0,10,0" Cursor="Hand" ToolTip="Click to copy link to clipboard"/>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                    <Button Name="btnManualExportPackage" Content="📦 All Formats" Background="#0284C7" Foreground="#FFFFFF" Margin="0,0,6,0" Padding="10,6" IsEnabled="False" ToolTip="Export PNG map, PDF report, and GPX track into a single folder"/>
                                     <Button Name="btnManualExportPdf" Content="📄 PDF" Background="{DynamicResource BtnSecondaryBg}" Foreground="{DynamicResource BtnSecondaryFg}" Margin="0,0,6,0" Padding="10,6" IsEnabled="False" ToolTip="Export route report as PDF"/>
                                     <Button Name="btnManualExportGpx" Content="💾 GPX" Background="{DynamicResource BtnSecondaryBg}" Foreground="{DynamicResource BtnSecondaryFg}" Margin="0,0,6,0" Padding="10,6" IsEnabled="False" ToolTip="Export route track as GPX"/>
                                     <Button Name="btnManualExportKml" Content="💾 KML" Background="{DynamicResource BtnSecondaryBg}" Foreground="{DynamicResource BtnSecondaryFg}" Margin="0,0,6,0" Padding="10,6" IsEnabled="False" ToolTip="Export route track as KML"/>
@@ -544,7 +608,7 @@ function Get-AppXaml {
                     </Grid.RowDefinitions>
 
                     <!-- Batch Controls Card -->
-                    <Border Grid.Row="0" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,0,10">
+                    <Border Name="borderBatchInputCard" Grid.Row="0" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,0,10" AllowDrop="True">
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
@@ -573,6 +637,7 @@ function Get-AppXaml {
                                 </Grid.ColumnDefinitions>
                                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                     <TextBlock Name="lblBatchFileInfo" Text="No file loaded." Foreground="{DynamicResource TextSecondary}" FontSize="12"/>
+                                    <TextBlock Name="lblBatchDropHint" Text="• Drag &amp; Drop file here" Foreground="#38BDF8" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center"/>
                                 </StackPanel>
                                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0">
                                     <TextBlock Name="lblBatchDefaultRouteType" Text="Default route type:" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0"/>
@@ -636,22 +701,49 @@ function Get-AppXaml {
                         </TabItem>
 
                         <TabItem Name="tabSubResults" Header="📊 Calculation Results">
-                            <Border Background="{DynamicResource BgDark}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="1" CornerRadius="6" Margin="0,6,0,0">
-                                <DataGrid Name="dgBatchResults">
-                                    <DataGrid.Columns>
-                                        <DataGridTextColumn Header="ID" Binding="{Binding Id}" Width="45"/>
-                                        <DataGridTextColumn Header="Route Name" Binding="{Binding Name}" Width="170"/>
-                                        <DataGridTextColumn Header="Origin (Start)" Binding="{Binding Start_Original}" Width="180"/>
-                                        <DataGridTextColumn Header="Destination (End)" Binding="{Binding End_Original}" Width="180"/>
-                                        <DataGridTextColumn Header="Waypoints" Binding="{Binding WaypointsCount}" Width="75"/>
-                                        <DataGridTextColumn Header="Type" Binding="{Binding RouteType}" Width="75"/>
-                                        <DataGridTextColumn Header="Distance (km)" Binding="{Binding DistanceKm}" Width="95"/>
-                                        <DataGridTextColumn Header="Duration (min)" Binding="{Binding DurationMin}" Width="85"/>
-                                        <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="110"/>
-                                        <DataGridTextColumn Header="PNG Map" Binding="{Binding MapPath}" Width="*"/>
-                                    </DataGrid.Columns>
-                                </DataGrid>
-                            </Border>
+                            <Grid Margin="0,6,0,0">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
+                                <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="1" CornerRadius="6" Padding="8,6" Margin="0,0,0,6">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="220"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="160"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="🔍 Filter:" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,6,0" FontSize="12"/>
+                                        <TextBox Name="txtBatchSearch" Grid.Column="1" VerticalAlignment="Center" ToolTip="Filter routes by address or name" Height="26" FontSize="12"/>
+                                        <TextBlock Grid.Column="2" Text="Status:" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center" Margin="14,0,6,0" FontSize="12"/>
+                                        <ComboBox Name="cmbBatchStatusFilter" Grid.Column="3" VerticalAlignment="Center" Height="26" FontSize="11">
+                                            <ComboBoxItem Content="All Statuses" Tag="ALL" IsSelected="True"/>
+                                            <ComboBoxItem Content="Success (OK)" Tag="OK"/>
+                                            <ComboBoxItem Content="Errors / Incomplete" Tag="ERROR"/>
+                                        </ComboBox>
+                                        <Button Name="btnRetryFailedBatch" Grid.Column="5" Content="🔁 Retry Failed" Background="#D97706" Foreground="#FFFFFF" Padding="12,5" FontSize="11" FontWeight="SemiBold" ToolTip="Reprocess only routes that failed or encountered geocoding errors" IsEnabled="False"/>
+                                    </Grid>
+                                </Border>
+                                <Border Grid.Row="1" Background="{DynamicResource BgDark}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="1" CornerRadius="6">
+                                    <DataGrid Name="dgBatchResults">
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn Header="ID" Binding="{Binding Id}" Width="45"/>
+                                            <DataGridTextColumn Header="Route Name" Binding="{Binding Name}" Width="170"/>
+                                            <DataGridTextColumn Header="Origin (Start)" Binding="{Binding Start_Original}" Width="180"/>
+                                            <DataGridTextColumn Header="Destination (End)" Binding="{Binding End_Original}" Width="180"/>
+                                            <DataGridTextColumn Header="Waypoints" Binding="{Binding WaypointsCount}" Width="75"/>
+                                            <DataGridTextColumn Header="Type" Binding="{Binding RouteType}" Width="75"/>
+                                            <DataGridTextColumn Header="Distance (km)" Binding="{Binding DistanceKm}" Width="95"/>
+                                            <DataGridTextColumn Header="Duration (min)" Binding="{Binding DurationMin}" Width="85"/>
+                                            <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="110"/>
+                                            <DataGridTextColumn Header="PNG Map" Binding="{Binding MapPath}" Width="*"/>
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                </Border>
+                            </Grid>
                         </TabItem>
 
                         <TabItem Name="tabSubPoints" Header="📍 Points Detail">
@@ -765,56 +857,93 @@ function Get-AppXaml {
                             </StackPanel>
                         </Border>
 
-                        <!-- API Usage & Cost Estimation Card (Feature 6.S) -->
+                        <!-- API Request Statistics Card -->
                         <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="1" CornerRadius="8" Padding="16" Margin="0,0,0,14">
                             <StackPanel>
-                                <TextBlock Name="lblSettingsApiUsageHeader" Text="Google Maps Platform API Usage &amp; Cost Tracker" FontSize="16" FontWeight="Bold" Foreground="{DynamicResource TextPrimary}" Margin="0,0,0,6"/>
-                                <TextBlock Name="lblSettingsApiUsageDesc" Text="Live tracking of API calls and estimated billable amounts against Google Maps Platform rates ($5/1k Geocoding, $5/1k Routes, $2/1k Static Maps)." FontSize="12" Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,12" TextWrapping="Wrap"/>
+                                <TextBlock Name="lblSettingsApiUsageHeader" Text="Mapy.com API Request Statistics" FontSize="16" FontWeight="Bold" Foreground="{DynamicResource TextPrimary}" Margin="0,0,0,6"/>
+                                <TextBlock Name="lblSettingsApiUsageDesc" Text="Live tracking of Mapy.com API requests across the current application session and monthly billing periods." FontSize="12" Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,12" TextWrapping="Wrap"/>
 
-                                <Grid Margin="0,0,0,10">
+                                <!-- Top summary cards: Session vs Month -->
+                                <Grid Margin="0,0,0,12">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
-                                    <Border Background="{DynamicResource BgDark}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,6,0">
+                                    <Border Background="{DynamicResource BgDark}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,6,0">
                                         <StackPanel>
-                                            <TextBlock Text="SESSION CALLS" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource TextSecondary}"/>
-                                            <TextBlock Name="lblApiUsageSessionCalls" Text="0 calls" FontSize="16" FontWeight="Bold" Foreground="#38BDF8"/>
+                                            <TextBlock Text="TOTAL SESSION REQUESTS" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource TextSecondary}"/>
+                                            <TextBlock Name="lblApiUsageSessionCalls" Text="0 calls" FontSize="20" FontWeight="Bold" Foreground="#38BDF8" Margin="0,2,0,0"/>
                                         </StackPanel>
                                     </Border>
-                                    <Border Grid.Column="1" Background="{DynamicResource BgDark}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="1" CornerRadius="6" Padding="10" Margin="3,0,3,0">
+                                    <Border Grid.Column="1" Background="{DynamicResource BgDark}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="1" CornerRadius="6" Padding="12" Margin="6,0,0,0">
                                         <StackPanel>
-                                            <TextBlock Text="MONTHLY CALLS" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource TextSecondary}"/>
-                                            <TextBlock Name="lblApiUsageMonthlyCalls" Text="0 calls" FontSize="16" FontWeight="Bold" Foreground="#10B981"/>
-                                        </StackPanel>
-                                    </Border>
-                                    <Border Grid.Column="2" Background="{DynamicResource BgDark}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="1" CornerRadius="6" Padding="10" Margin="6,0,0,0">
-                                        <StackPanel>
-                                            <TextBlock Text="ESTIMATED COST" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource TextSecondary}"/>
-                                            <TextBlock Name="lblEstimatedCostMonthly" Text="$0.00" FontSize="16" FontWeight="Bold" Foreground="#F59E0B"/>
+                                            <TextBlock Text="TOTAL MONTHLY REQUESTS" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource TextSecondary}"/>
+                                            <TextBlock Name="lblApiUsageMonthlyCalls" Text="0 calls" FontSize="20" FontWeight="Bold" Foreground="#10B981" Margin="0,2,0,0"/>
                                         </StackPanel>
                                     </Border>
                                 </Grid>
 
-                                <Grid Margin="0,4,0,10">
+                                <!-- Endpoint breakdown table -->
+                                <Border Background="{DynamicResource BgDark}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,0,12">
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="2*"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <!-- Headers -->
+                                        <TextBlock Text="API Endpoint Category" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,8"/>
+                                        <TextBlock Grid.Column="1" Text="Session" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource TextSecondary}" HorizontalAlignment="Right" Margin="0,0,10,8"/>
+                                        <TextBlock Grid.Column="2" Text="Current Month" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource TextSecondary}" HorizontalAlignment="Right" Margin="0,0,0,8"/>
+
+                                        <!-- Row 1: Geocoding & Autosuggest -->
+                                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,3,0,3">
+                                            <TextBlock Text="📍 Geocoding &amp; Suggest" FontSize="12" Foreground="{DynamicResource TextPrimary}"/>
+                                            <TextBlock Text=" (/v1/suggest, /v1/geocode)" FontSize="10" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                                        </StackPanel>
+                                        <TextBlock Name="lblApiUsageSessionGeo" Grid.Row="1" Grid.Column="1" Text="0" FontSize="12" FontWeight="SemiBold" Foreground="#38BDF8" HorizontalAlignment="Right" Margin="0,3,10,3"/>
+                                        <TextBlock Name="lblApiUsageMonthlyGeo" Grid.Row="1" Grid.Column="2" Text="0" FontSize="12" FontWeight="SemiBold" Foreground="#10B981" HorizontalAlignment="Right" Margin="0,3,0,3"/>
+
+                                        <!-- Row 2: Routes API -->
+                                        <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,3,0,3">
+                                            <TextBlock Text="🚗 Route Calculations" FontSize="12" Foreground="{DynamicResource TextPrimary}"/>
+                                            <TextBlock Text=" (/v1/routing)" FontSize="10" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                                        </StackPanel>
+                                        <TextBlock Name="lblApiUsageSessionRoutes" Grid.Row="2" Grid.Column="1" Text="0" FontSize="12" FontWeight="SemiBold" Foreground="#38BDF8" HorizontalAlignment="Right" Margin="0,3,10,3"/>
+                                        <TextBlock Name="lblApiUsageMonthlyRoutes" Grid.Row="2" Grid.Column="2" Text="0" FontSize="12" FontWeight="SemiBold" Foreground="#10B981" HorizontalAlignment="Right" Margin="0,3,0,3"/>
+
+                                        <!-- Row 3: Static Maps & Imagery -->
+                                        <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,3,0,0">
+                                            <TextBlock Text="🗺️ Map Imagery &amp; Tiles" FontSize="12" Foreground="{DynamicResource TextPrimary}"/>
+                                            <TextBlock Text=" (Static maps &amp; previews)" FontSize="10" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                                        </StackPanel>
+                                        <TextBlock Name="lblApiUsageSessionStatic" Grid.Row="3" Grid.Column="1" Text="0" FontSize="12" FontWeight="SemiBold" Foreground="#38BDF8" HorizontalAlignment="Right" Margin="0,3,10,0"/>
+                                        <TextBlock Name="lblApiUsageMonthlyStatic" Grid.Row="3" Grid.Column="2" Text="0" FontSize="12" FontWeight="SemiBold" Foreground="#10B981" HorizontalAlignment="Right" Margin="0,3,0,0"/>
+                                    </Grid>
+                                </Border>
+
+                                <!-- Bottom bar: Tracking period and Reset Month button -->
+                                <Grid Margin="0,2,0,0">
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto"/>
-                                        <ColumnDefinition Width="140"/>
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock Text="Currency:" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondary}" FontSize="12" Margin="0,0,10,0"/>
-                                    <ComboBox Name="cmbApiCurrency" Grid.Column="1" VerticalAlignment="Center">
-                                        <ComboBoxItem Content="USD ($)" Tag="USD" IsSelected="True"/>
-                                        <ComboBoxItem Content="EUR (€)" Tag="EUR"/>
-                                        <ComboBoxItem Content="PLN (zł)" Tag="PLN"/>
-                                    </ComboBox>
-                                    <TextBlock Name="lblFreeTierInfo" Grid.Column="2" Text="Free tier credit: $200.00 / month" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center" Margin="14,0,0,0"/>
-                                    <Button Name="btnResetApiCounters" Grid.Column="3" Content="🔄 Reset Month" Background="{DynamicResource BtnSecondaryBg}" Foreground="{DynamicResource BtnSecondaryFg}" Padding="10,5" FontSize="11"/>
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Text="📅 Tracking Month: " Foreground="{DynamicResource TextSecondary}" FontSize="12"/>
+                                        <TextBlock Name="lblApiBillingPeriod" Text="2026-09" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" FontSize="12"/>
+                                    </StackPanel>
+                                    <Button Name="btnResetApiCounters" Grid.Column="1" Content="🔄 Reset Month Counters" Background="{DynamicResource BtnSecondaryBg}" Foreground="{DynamicResource BtnSecondaryFg}" Padding="12,5" FontSize="11"/>
                                 </Grid>
                             </StackPanel>
                         </Border>
+
 
                         <!-- Preferences Card -->
                         <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="1" CornerRadius="8" Padding="16" Margin="0,0,0,14">
@@ -1224,15 +1353,75 @@ function Get-AppXaml {
             </TabItem>
         </TabControl>
 
+        <!-- Collapsible Activity Log Drawer (Milestone 4) -->
+        <Border Name="drawerLog" Grid.Row="2" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="1,1,1,0" CornerRadius="8,8,0,0" Visibility="Collapsed" Margin="0,4,0,0" Height="170">
+            <Grid Margin="10,8">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <Grid Grid.Row="0" Margin="0,0,0,6">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="📜 Activity Log" FontWeight="Bold" FontSize="12" Foreground="{DynamicResource TextPrimary}" Margin="0,0,12,0"/>
+                        <RadioButton Name="rbLogAll" Content="All" IsChecked="True" Foreground="{DynamicResource TextSecondary}" FontSize="11" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                        <RadioButton Name="rbLogInfo" Content="Info" Foreground="#38BDF8" FontSize="11" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                        <RadioButton Name="rbLogWarn" Content="Warn" Foreground="#FBBF24" FontSize="11" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                        <RadioButton Name="rbLogError" Content="Error" Foreground="#F87171" FontSize="11" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" Orientation="Horizontal">
+                        <Button Name="btnClearLogDrawer" Content="🗑 Clear" Background="{DynamicResource BtnSecondaryBg}" Foreground="{DynamicResource BtnSecondaryFg}" Padding="6,2" FontSize="11" Margin="0,0,6,0"/>
+                        <Button Name="btnCopyLogDrawer" Content="📋 Copy" Background="{DynamicResource BtnSecondaryBg}" Foreground="{DynamicResource BtnSecondaryFg}" Padding="6,2" FontSize="11" Margin="0,0,6,0"/>
+                        <Button Name="btnCloseLogDrawer" Content="✕" Background="Transparent" BorderThickness="0" Foreground="{DynamicResource TextSecondary}" FontSize="12" Padding="4,0" ToolTip="Close Log"/>
+                    </StackPanel>
+                </Grid>
+                <TextBox Name="txtLogDrawer" Grid.Row="1" Background="#0F172A" Foreground="#E2E8F0" FontFamily="Consolas" FontSize="11"
+                         IsReadOnly="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" TextWrapping="NoWrap"
+                         BorderBrush="{DynamicResource BorderCard}" BorderThickness="1" Padding="6"/>
+            </Grid>
+        </Border>
+
         <!-- Footer -->
-        <Border Grid.Row="2" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="1" CornerRadius="6" Padding="10,6" Margin="0,10,0,0">
+        <Border Grid.Row="3" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="1" CornerRadius="6" Padding="10,6" Margin="0,8,0,0">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <TextBlock Name="lblFooterStatus" Text="Ready." Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center"/>
-                <TextBlock Name="lblFooterVersion" Grid.Column="1" Text="Mapy.com Routes v2.1" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center"/>
+                <Button Name="btnToggleLogDrawer" Grid.Column="1" Content="📜 Activity Log" Background="{DynamicResource BtnSecondaryBg}" Foreground="{DynamicResource BtnSecondaryFg}" Padding="8,2" FontSize="11" Margin="0,0,14,0" ToolTip="Toggle live activity log drawer"/>
+                <TextBlock Name="lblFooterVersion" Grid.Column="2" Text="Mapy.com Routes v2.1" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center"/>
+            </Grid>
+        </Border>
+
+        <!-- Floating Toast Notification Overlay (Milestone 4) -->
+        <Border Name="pnlToastContainer" Grid.Row="1" Grid.RowSpan="3" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,24,24"
+                Background="{DynamicResource BgCard}" BorderBrush="#38BDF8" BorderThickness="1.5" CornerRadius="8" Padding="14,10"
+                Visibility="Collapsed" Panel.ZIndex="9999" MaxWidth="420">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="16" ShadowDepth="4" Opacity="0.45" Color="#000000"/>
+            </Border.Effect>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Name="txtToastIcon" Text="✅" FontSize="20" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,10,0">
+                    <TextBlock Name="txtToastTitle" Text="Success" FontWeight="Bold" FontSize="13" Foreground="{DynamicResource TextPrimary}"/>
+                    <TextBlock Name="txtToastMessage" Text="Action completed." FontSize="12" Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                        <Button Name="btnToastAction" Content="Open File" Background="#2563EB" Foreground="#FFFFFF" Padding="8,3" FontSize="11" Visibility="Collapsed" Margin="0,0,6,0"/>
+                        <Button Name="btnToastActionFolder" Content="Open Folder" Background="{DynamicResource BtnSecondaryBg}" Foreground="{DynamicResource BtnSecondaryFg}" Padding="8,3" FontSize="11" Visibility="Collapsed"/>
+                    </StackPanel>
+                </StackPanel>
+                <Button Name="btnToastClose" Grid.Column="2" Content="✕" Background="Transparent" BorderThickness="0" Foreground="{DynamicResource TextSecondary}" FontSize="12" Padding="4" VerticalAlignment="Top" ToolTip="Dismiss"/>
             </Grid>
         </Border>
     </Grid>

@@ -311,6 +311,71 @@ function Get-AddressCoordinates {
         }
     }
 }
+Set-Item -Path "function:global:Get-AddressCoordinates" -Value (Get-Item "function:Get-AddressCoordinates").ScriptBlock -ErrorAction SilentlyContinue
+
+function Get-MapySuggest {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Query,
+        [Parameter(Mandatory)][string]$ApiKey,
+        [Parameter()][string]$LanguageCode = 'en',
+        [Parameter()][int]$Limit = 5
+    )
+    if ([string]::IsNullOrWhiteSpace($Query) -or $Query.Trim().Length -lt 2) { return @() }
+
+    $encodedQuery = [System.Uri]::EscapeDataString($Query.Trim())
+    $lang = if ($LanguageCode) { ($LanguageCode -split '[-_]')[0].ToLower() } else { 'en' }
+
+    # 1. Try Mapy.com suggest endpoint
+    $suggestUrl = "https://api.mapy.cz/v1/suggest?query=$encodedQuery&lang=$lang&limit=$Limit&type=regional&apikey=$ApiKey"
+    try {
+        $resp = Invoke-MapyRestJson -Uri $suggestUrl -TimeoutSec 5
+        if ($resp -and $resp.items -and @($resp.items).Count -gt 0) {
+            $suggestions = [System.Collections.Generic.List[object]]::new()
+            foreach ($it in $resp.items) {
+                $name = if ($it.name) { [string]$it.name } else { '' }
+                $label = if ($it.label) { [string]$it.label } else { '' }
+                $full = if ($name -and $label -and $name -ne $label) { "$name, $label" } elseif ($name) { $name } else { $label }
+                $suggestions.Add([PSCustomObject]@{
+                    Name      = $name
+                    Label     = $label
+                    FullText  = $full
+                    Latitude  = if ($it.position -and $it.position.lat) { [double]$it.position.lat } else { $null }
+                    Longitude = if ($it.position -and $it.position.lon) { [double]$it.position.lon } else { $null }
+                })
+            }
+            return @($suggestions.ToArray())
+        }
+    }
+    catch { }
+
+    # 2. Fallback to geocode endpoint with limit
+    $geocodeUrl = "https://api.mapy.cz/v1/geocode?query=$encodedQuery&lang=$lang&limit=$Limit&type=regional&apikey=$ApiKey"
+    try {
+        $resp = Invoke-MapyRestJson -Uri $geocodeUrl -TimeoutSec 5
+        if ($resp -and $resp.items -and @($resp.items).Count -gt 0) {
+            $suggestions = [System.Collections.Generic.List[object]]::new()
+            foreach ($it in $resp.items) {
+                $name = if ($it.name) { [string]$it.name } else { '' }
+                $label = if ($it.label) { [string]$it.label } else { '' }
+                $loc = if ($it.location) { [string]$it.location } else { '' }
+                $full = if ($name -and $loc) { "$name, $loc" } elseif ($name) { $name } else { $label }
+                $suggestions.Add([PSCustomObject]@{
+                    Name      = $name
+                    Label     = $label
+                    FullText  = $full
+                    Latitude  = if ($it.position -and $it.position.lat) { [double]$it.position.lat } else { $null }
+                    Longitude = if ($it.position -and $it.position.lon) { [double]$it.position.lon } else { $null }
+                })
+            }
+            return @($suggestions.ToArray())
+        }
+    }
+    catch { }
+
+    return @()
+}
+Set-Item -Path "function:global:Get-MapySuggest" -Value (Get-Item "function:Get-MapySuggest").ScriptBlock -ErrorAction SilentlyContinue
 
 function Get-GeocodeStatusDescription {
     [CmdletBinding()]

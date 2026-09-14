@@ -105,6 +105,57 @@ function Initialize-WebView2Environment {
                 } catch { }
             }
         })
+        $wv.Add_CoreWebView2InitializationCompleted({
+            param($s, $e)
+            if ($e.IsSuccess -and $wv.CoreWebView2) {
+                $wv.CoreWebView2.add_WebMessageReceived({
+                    param($sender, $args)
+                    try {
+                        $raw = $args.WebMessageAsJson
+                        $data = $raw | ConvertFrom-Json
+                        if ($data -and $data.action) {
+                            $w = if ($script:Controls -and $script:Controls.Window) { $script:Controls.Window } elseif ($script:MainWindow) { $script:MainWindow } else { [System.Windows.Application]::Current.MainWindow }
+                            if ($w -and $w.Dispatcher) {
+                                $w.Dispatcher.BeginInvoke([Action]{
+                                    $script:SuppressAutosuggest = $true
+                                    try {
+                                        if ($data.action -eq 'setStart' -and $script:Controls.txtManualStart) {
+                                            $script:Controls.txtManualStart.Text = $data.coords
+                                            if ($script:Controls.badgeStartGeocode) {
+                                                $script:Controls.badgeStartGeocode.Text = '🟢 Exact'
+                                                $script:Controls.badgeStartGeocode.Foreground = [System.Windows.Media.Brushes]::LimeGreen
+                                                $script:Controls.badgeStartGeocode.ToolTip = "Coordinates: $($data.coords)"
+                                            }
+                                            Show-AppToastNotification -Title "Map Location Selected" -Message "Start set to $($data.coords)" -Type Info
+                                        }
+                                        elseif ($data.action -eq 'setDest' -and $script:Controls.txtManualEnd) {
+                                            $script:Controls.txtManualEnd.Text = $data.coords
+                                            if ($script:Controls.badgeEndGeocode) {
+                                                $script:Controls.badgeEndGeocode.Text = '🟢 Exact'
+                                                $script:Controls.badgeEndGeocode.Foreground = [System.Windows.Media.Brushes]::LimeGreen
+                                                $script:Controls.badgeEndGeocode.ToolTip = "Coordinates: $($data.coords)"
+                                            }
+                                            Show-AppToastNotification -Title "Map Location Selected" -Message "Destination set to $($data.coords)" -Type Info
+                                        }
+                                        elseif ($data.action -eq 'addStop' -and $script:Controls.lstWaypoints) {
+                                            $null = $script:Controls.lstWaypoints.Items.Add($data.coords)
+                                            Show-AppToastNotification -Title "Map Location Selected" -Message "Waypoint added: $($data.coords)" -Type Info
+                                        }
+                                        elseif ($data.action -eq 'copy') {
+                                            [System.Windows.Clipboard]::SetText($data.coords)
+                                            Show-AppToastNotification -Title "Coordinates Copied" -Message "Copied to clipboard: $($data.coords)" -Type Info
+                                        }
+                                    }
+                                    finally {
+                                        $script:SuppressAutosuggest = $false
+                                    }
+                                }) | Out-Null
+                            }
+                        }
+                    } catch { }
+                })
+            }
+        })
         $wv.Add_NavigationCompleted({
             param($s, $e)
             if ($e.IsSuccess) {
@@ -343,10 +394,71 @@ function New-RouteHtmlMap {
 
     const map = L.map('map', { zoomControl: true });
 
-    L.tileLayer('$tileUrl', {
+    const baseStandard = L.tileLayer('$tileUrl', {
       maxZoom: 19,
-      attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-    }).addTo(map);
+      attribution: '&copy; CARTO &copy; OpenStreetMap'
+    });
+
+    const baseOsm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
+    });
+
+    const baseSatellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom: 18,
+      attribution: '&copy; Esri, Earthstar Geographics'
+    });
+
+    const baseMaps = {
+      "🗺️ Standard": baseStandard,
+      "🌐 OpenStreetMap": baseOsm,
+      "🛰️ Satellite": baseSatellite
+    };
+
+    baseStandard.addTo(map);
+    L.control.layers(baseMaps, null, { position: 'topleft' }).addTo(map);
+
+    function sendMapAction(action, lat, lng) {
+      const coordStr = lat + ', ' + lng;
+      try {
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage({ action: action, coords: coordStr, lat: lat, lng: lng });
+        }
+      } catch (err) {}
+      try {
+        navigator.clipboard.writeText(coordStr);
+      } catch (err) {}
+    }
+
+    // Context menu / right-click (Milestone 2)
+    map.on('contextmenu', function(e) {
+      const lat = e.latlng.lat.toFixed(5);
+      const lng = e.latlng.lng.toFixed(5);
+      const coordStr = lat + ', ' + lng;
+      const html = '<div style="font-family:sans-serif;font-size:12px;min-width:160px;line-height:1.4;">' +
+        '<div style="font-weight:bold;margin-bottom:6px;color:#94a3b8;">📍 ' + coordStr + '</div>' +
+        '<button style="width:100%;text-align:left;margin-bottom:4px;padding:4px 8px;cursor:pointer;background:#10b981;color:#fff;border:none;border-radius:4px;font-size:11px;" onclick="sendMapAction(\'setStart\',' + lat + ',' + lng + ');map.closePopup();">🟢 Set as Start</button>' +
+        '<button style="width:100%;text-align:left;margin-bottom:4px;padding:4px 8px;cursor:pointer;background:#3b82f6;color:#fff;border:none;border-radius:4px;font-size:11px;" onclick="sendMapAction(\'addStop\',' + lat + ',' + lng + ');map.closePopup();">🔵 Add as Stop</button>' +
+        '<button style="width:100%;text-align:left;margin-bottom:4px;padding:4px 8px;cursor:pointer;background:#ef4444;color:#fff;border:none;border-radius:4px;font-size:11px;" onclick="sendMapAction(\'setDest\',' + lat + ',' + lng + ');map.closePopup();">🔴 Set as Destination</button>' +
+        '<button style="width:100%;text-align:left;padding:4px 8px;cursor:pointer;background:#475569;color:#fff;border:none;border-radius:4px;font-size:11px;" onclick="sendMapAction(\'copy\',' + lat + ',' + lng + ');map.closePopup();">📋 Copy Lat/Lng</button>' +
+        '</div>';
+      L.popup().setLatLng(e.latlng).setContent(html).openOn(map);
+    });
+
+    // Context / click coordinates popup (Milestone 2)
+    map.on('click', function(e) {
+      const lat = e.latlng.lat.toFixed(5);
+      const lng = e.latlng.lng.toFixed(5);
+      const coordStr = lat + ', ' + lng;
+      const html = '<div style="font-family:sans-serif;font-size:12px;min-width:150px;">' +
+        '<strong>📍 Location</strong><br/>' + coordStr + '<br/>' +
+        '<div style="display:flex;gap:4px;margin-top:6px;">' +
+        '<button style="flex:1;padding:3px 6px;cursor:pointer;background:#10b981;color:#fff;border:none;border-radius:4px;font-size:10px;" onclick="sendMapAction(\'setStart\',' + lat + ',' + lng + ');map.closePopup();">Start</button>' +
+        '<button style="flex:1;padding:3px 6px;cursor:pointer;background:#ef4444;color:#fff;border:none;border-radius:4px;font-size:10px;" onclick="sendMapAction(\'setDest\',' + lat + ',' + lng + ');map.closePopup();">Dest</button>' +
+        '<button style="flex:1;padding:3px 6px;cursor:pointer;background:#2563eb;color:#fff;border:none;border-radius:4px;font-size:10px;" onclick="sendMapAction(\'copy\',' + lat + ',' + lng + ');map.closePopup();">Copy</button>' +
+        '</div></div>';
+      L.popup().setLatLng(e.latlng).setContent(html).openOn(map);
+    });
 
     function createIcon(label, cls) {
       return L.divIcon({

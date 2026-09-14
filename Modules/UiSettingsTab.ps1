@@ -16,29 +16,39 @@ function Update-ApiUsageBadgeText {
 
     if (-not $script:AppConfig -or -not $script:AppConfig.ApiUsage) { return }
     $u = $script:AppConfig.ApiUsage
-    $curr = if ($u.PreferredCurrency) { $u.PreferredCurrency } else { 'USD' }
 
-    $costObj = Get-EstimatedApiCost -GeocodingCalls $u.MonthlyCallsGeocoding `
-        -RoutesBasicCalls $u.MonthlyCallsRoutes `
-        -RoutesAdvancedCalls 0 `
-        -StaticMapsCalls $u.MonthlyCallsStatic `
-        -Currency $curr
+    $totSession = [int]$u.SessionCallsGeocoding + [int]$u.SessionCallsRoutes + [int]$u.SessionCallsStatic
+    $totMonthly = [int]$u.MonthlyCallsGeocoding + [int]$u.MonthlyCallsRoutes + [int]$u.MonthlyCallsStatic
 
-    if ($script:Controls -and $script:Controls.txtApiUsageBadge) {
-        $script:Controls.txtApiUsageBadge.Text = "API: $($costObj.FormattedCost)"
-    }
-    if ($script:Controls -and $script:Controls.lblApiUsageSessionCalls) {
-        $totSession = $u.SessionCallsGeocoding + $u.SessionCallsRoutes + $u.SessionCallsStatic
-        $script:Controls.lblApiUsageSessionCalls.Text = "$totSession calls"
-    }
-    if ($script:Controls -and $script:Controls.lblApiUsageMonthlyCalls) {
-        $script:Controls.lblApiUsageMonthlyCalls.Text = "$($costObj.TotalCalls) calls"
-    }
-    if ($script:Controls -and $script:Controls.lblEstimatedCostMonthly) {
-        $script:Controls.lblEstimatedCostMonthly.Text = $costObj.FormattedCost
-    }
-    if ($script:Controls -and $script:Controls.lblFreeTierInfo) {
-        $script:Controls.lblFreeTierInfo.Text = "Free Tier Balance: $($costObj.FreeTierRemaining)"
+    if ($script:Controls) {
+        if ($script:Controls.lblApiUsageSessionCalls) {
+            $script:Controls.lblApiUsageSessionCalls.Text = "$totSession calls"
+        }
+        if ($script:Controls.lblApiUsageMonthlyCalls) {
+            $script:Controls.lblApiUsageMonthlyCalls.Text = "$totMonthly calls"
+        }
+        if ($script:Controls.lblApiUsageSessionGeo) {
+            $script:Controls.lblApiUsageSessionGeo.Text = "$($u.SessionCallsGeocoding) calls"
+        }
+        if ($script:Controls.lblApiUsageMonthlyGeo) {
+            $script:Controls.lblApiUsageMonthlyGeo.Text = "$($u.MonthlyCallsGeocoding) calls"
+        }
+        if ($script:Controls.lblApiUsageSessionRoutes) {
+            $script:Controls.lblApiUsageSessionRoutes.Text = "$($u.SessionCallsRoutes) calls"
+        }
+        if ($script:Controls.lblApiUsageMonthlyRoutes) {
+            $script:Controls.lblApiUsageMonthlyRoutes.Text = "$($u.MonthlyCallsRoutes) calls"
+        }
+        if ($script:Controls.lblApiUsageSessionStatic) {
+            $script:Controls.lblApiUsageSessionStatic.Text = "$($u.SessionCallsStatic) calls"
+        }
+        if ($script:Controls.lblApiUsageMonthlyStatic) {
+            $script:Controls.lblApiUsageMonthlyStatic.Text = "$($u.MonthlyCallsStatic) calls"
+        }
+        if ($script:Controls.lblApiBillingPeriod) {
+            $period = if ($u.CurrentMonth) { [string]$u.CurrentMonth } else { (Get-Date).ToString('yyyy-MM') }
+            $script:Controls.lblApiBillingPeriod.Text = $period
+        }
     }
 }
 
@@ -364,6 +374,39 @@ function Apply-AppLanguage {
         $Controls.lblGoogleUrlDisplay.Text = (Get-LocText 'ManualNoUrl')
     }
 
+    # Recent Routes & Quick Actions (Milestone 1)
+    if ($Controls.lblManualRecentRoutes) { $Controls.lblManualRecentRoutes.Text = (Get-LocText 'ManualRecentRoutes' 'Recent Routes:') }
+    if ($Controls.btnSwapEndpoints) {
+        $Controls.btnSwapEndpoints.Content = (Get-LocText 'ManualBtnSwap' '⇄ Swap / Return Trip')
+        $Controls.btnSwapEndpoints.ToolTip = (Get-LocText 'ManualBtnSwapTooltip' 'Swap Origin and Destination (reverses route for return trip)')
+    }
+    if ($Controls.btnResetManualForm) {
+        $Controls.btnResetManualForm.Content = (Get-LocText 'ManualBtnResetForm' '🔄 Clear Form')
+        $Controls.btnResetManualForm.ToolTip = (Get-LocText 'ManualBtnResetFormTooltip' 'Clear origin, destination, and all waypoints')
+    }
+    if ($Controls.btnManualExportPackage) {
+        $Controls.btnManualExportPackage.Content = (Get-LocText 'ManualBtnExportPackage' '📦 All Formats')
+        $Controls.btnManualExportPackage.ToolTip = (Get-LocText 'ManualBtnExportPackageTooltip' 'Export PNG map, PDF report, and GPX track into a single folder')
+    }
+    if ($Controls.lblBatchDropHint) { $Controls.lblBatchDropHint.Text = "• " + (Get-LocText 'BatchDragDropHint' 'Drop Excel (.xlsx), CSV or JSON file here') }
+    if ($Controls.txtBatchSearch) { $Controls.txtBatchSearch.ToolTip = (Get-LocText 'BatchSearchPlaceholder' 'Filter routes by address or name...') }
+    if ($Controls.btnRetryFailedBatch) {
+        $Controls.btnRetryFailedBatch.Content = (Get-LocText 'BatchBtnRetryFailed' '🔁 Retry Failed')
+        $Controls.btnRetryFailedBatch.ToolTip = (Get-LocText 'BatchBtnRetryFailedTooltip' 'Reprocess only routes that failed or encountered geocoding errors')
+    }
+    if ($Controls.btnToggleInputPanel) { $Controls.btnToggleInputPanel.ToolTip = (Get-LocText 'TogglePanelCollapseTooltip' 'Toggle full-screen map preview') }
+
+    # Activity Log Drawer & Toast Localizations
+    if ($Controls.btnToggleLogDrawer)   { $Controls.btnToggleLogDrawer.Content = (Get-LocText 'BtnToggleLog' '📜 Activity Log') }
+    if ($Controls.btnClearLogDrawer)    { $Controls.btnClearLogDrawer.Content = (Get-LocText 'BtnClearLog' '🗑 Clear') }
+    if ($Controls.btnCopyLogDrawer)     { $Controls.btnCopyLogDrawer.Content = (Get-LocText 'BtnCopyLog' '📋 Copy') }
+    if ($Controls.rbLogAll)             { $Controls.rbLogAll.Content = (Get-LocText 'LogFilterAll' 'All') }
+    if ($Controls.rbLogInfo)            { $Controls.rbLogInfo.Content = (Get-LocText 'LogFilterInfo' 'Info') }
+    if ($Controls.rbLogWarn)            { $Controls.rbLogWarn.Content = (Get-LocText 'LogFilterWarn' 'Warn') }
+    if ($Controls.rbLogError)           { $Controls.rbLogError.Content = (Get-LocText 'LogFilterError' 'Error') }
+    if ($Controls.btnToastAction)       { $Controls.btnToastAction.Content = (Get-LocText 'ToastActionOpenFile' 'Open File') }
+    if ($Controls.btnToastActionFolder) { $Controls.btnToastActionFolder.Content = (Get-LocText 'ToastActionOpenFolder' 'Open Folder') }
+
     # Manual Map Controls & Exports
     if ($Controls.rbViewStatic)         { $Controls.rbViewStatic.Content = (Get-LocText 'MapStatic' '🖼️ Static Map') }
     if ($Controls.rbViewInteractive)    { $Controls.rbViewInteractive.Content = (Get-LocText 'MapInteractive' '🗺️ Interactive Map') }
@@ -476,8 +519,9 @@ function Apply-AppLanguage {
     if ($Controls.chkRememberKey)              { $Controls.chkRememberKey.Content = (Get-LocText 'SettingsChkRemember') }
 
     # API Usage Section
-    if ($Controls.lblSettingsApiUsageHeader)   { $Controls.lblSettingsApiUsageHeader.Text = (Get-LocText 'ApiUsageHeader' 'API Usage & Cost Estimation') }
-    if ($Controls.btnResetApiCounters)         { $Controls.btnResetApiCounters.Content = (Get-LocText 'ApiUsageBtnReset' '🔄 Reset Month') }
+    if ($Controls.lblSettingsApiUsageHeader)   { $Controls.lblSettingsApiUsageHeader.Text = (Get-LocText 'ApiUsageHeader' 'Mapy.com API Request Statistics') }
+    if ($Controls.lblSettingsApiUsageDesc)     { $Controls.lblSettingsApiUsageDesc.Text = (Get-LocText 'ApiUsageDesc' 'Live tracking of Mapy.com API requests across session and monthly billing periods.') }
+    if ($Controls.btnResetApiCounters)         { $Controls.btnResetApiCounters.Content = (Get-LocText 'ApiUsageBtnReset' '🔄 Reset Month Counters') }
 
     # Preferences Section
     if ($Controls.lblSettingsPrefHeader)       { $Controls.lblSettingsPrefHeader.Text = (Get-LocText 'SettingsHeaderPreferences') }
@@ -872,25 +916,27 @@ function Register-UiSettingsTabEvents {
         })
     }
 
-    # Currency selection changed
-    $cmbApiCurrency.Add_SelectionChanged({
-        if ($cmbApiCurrency.SelectedItem -and $script:AppConfig -and $script:AppConfig.ApiUsage) {
-            $curr = [string]$cmbApiCurrency.SelectedItem.Tag
-            $script:AppConfig.ApiUsage.PreferredCurrency = $curr
-            Update-ApiUsageBadgeText
-        }
-    })
+    # Currency selection changed (legacy backward compatibility)
+    if ($cmbApiCurrency) {
+        $cmbApiCurrency.Add_SelectionChanged({
+            if ($cmbApiCurrency.SelectedItem -and $script:AppConfig -and $script:AppConfig.ApiUsage) {
+                $curr = [string]$cmbApiCurrency.SelectedItem.Tag
+                $script:AppConfig.ApiUsage.PreferredCurrency = $curr
+                Update-ApiUsageBadgeText
+            }
+        })
+    }
 
     # Reset Monthly API Counters
     $btnResetApiCounters.Add_Click({
-        $ask = [System.Windows.MessageBox]::Show("Are you sure you want to reset monthly API counters to 0?", "Reset Counters", "YesNo", "Question")
+        $ask = [System.Windows.MessageBox]::Show("Are you sure you want to reset monthly API request counters to 0?", "Reset Counters", "YesNo", "Question")
         if ($ask -eq [System.Windows.MessageBoxResult]::Yes -and $script:AppConfig -and $script:AppConfig.ApiUsage) {
             $script:AppConfig.ApiUsage.MonthlyCallsGeocoding = 0
             $script:AppConfig.ApiUsage.MonthlyCallsRoutes = 0
             $script:AppConfig.ApiUsage.MonthlyCallsStatic = 0
             Save-AppConfig -Config $script:AppConfig | Out-Null
             Update-ApiUsageBadgeText
-            [System.Windows.MessageBox]::Show("Monthly counters reset to 0.", "Counters Reset", "OK", "Information")
+            Show-AppToastNotification -Title "Counters Reset" -Message "Monthly API request counters have been reset to 0." -Type Info
         }
     })
 

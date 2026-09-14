@@ -177,6 +177,39 @@ function Set-CurrentCartoApiKey([string]$Key) {
 }
 Set-Item -Path "function:global:Set-CurrentCartoApiKey" -Value (Get-Item "function:Set-CurrentCartoApiKey").ScriptBlock -ErrorAction SilentlyContinue
 
+$script:AppLogEntries = [System.Collections.ArrayList]::Synchronized([System.Collections.ArrayList]::new())
+
+function Update-LogDrawerDisplay {
+    [CmdletBinding()]
+    param()
+    if (-not $script:Controls -or -not $script:Controls.txtLogDrawer) { return }
+    $filter = if ($script:Controls.rbLogInfo -and $script:Controls.rbLogInfo.IsChecked) { 'INFO' }
+              elseif ($script:Controls.rbLogWarn -and $script:Controls.rbLogWarn.IsChecked) { 'WARN' }
+              elseif ($script:Controls.rbLogError -and $script:Controls.rbLogError.IsChecked) { 'ERROR' }
+              else { 'ALL' }
+
+    $sb = [System.Text.StringBuilder]::new()
+    $entries = @($script:AppLogEntries.ToArray())
+    foreach ($entry in $entries) {
+        if ($filter -eq 'ALL' -or $entry.Level -eq $filter -or ($filter -eq 'INFO' -and $entry.Level -eq 'OK')) {
+            [void]$sb.AppendLine($entry.FullLine)
+        }
+    }
+    $script:Controls.txtLogDrawer.Text = $sb.ToString()
+    $script:Controls.txtLogDrawer.ScrollToEnd()
+}
+Set-Item -Path "function:global:Update-LogDrawerDisplay" -Value (Get-Item "function:Update-LogDrawerDisplay").ScriptBlock -ErrorAction SilentlyContinue
+
+function Clear-AppLogDrawer {
+    [CmdletBinding()]
+    param()
+    $script:AppLogEntries.Clear()
+    if ($script:Controls -and $script:Controls.txtLogDrawer) {
+        $script:Controls.txtLogDrawer.Clear()
+    }
+}
+Set-Item -Path "function:global:Clear-AppLogDrawer" -Value (Get-Item "function:Clear-AppLogDrawer").ScriptBlock -ErrorAction SilentlyContinue
+
 function Write-AppLog {
     [CmdletBinding()]
     param(
@@ -194,6 +227,35 @@ function Write-AppLog {
     try {
         if ($script:LogFile) {
             [System.IO.File]::AppendAllText($script:LogFile, "$line`r`n", [System.Text.Encoding]::UTF8)
+        }
+    }
+    catch { }
+
+    # Buffer for Activity Log Drawer (Milestone 4)
+    try {
+        $entry = [PSCustomObject]@{
+            Timestamp = $ts
+            Level     = $Level
+            Message   = $safeMsg
+            FullLine  = $line
+        }
+        if ($script:AppLogEntries.Count -ge 600) {
+            $script:AppLogEntries.RemoveAt(0)
+        }
+        [void]$script:AppLogEntries.Add($entry)
+
+        $w = if ($script:Controls -and $script:Controls.Window) { $script:Controls.Window } elseif ($script:MainWindow) { $script:MainWindow } else { [System.Windows.Application]::Current.MainWindow }
+        if ($script:Controls -and $script:Controls.txtLogDrawer -and $w -and $w.Dispatcher) {
+            $w.Dispatcher.BeginInvoke([Action]{
+                $filter = if ($script:Controls.rbLogInfo -and $script:Controls.rbLogInfo.IsChecked) { 'INFO' }
+                          elseif ($script:Controls.rbLogWarn -and $script:Controls.rbLogWarn.IsChecked) { 'WARN' }
+                          elseif ($script:Controls.rbLogError -and $script:Controls.rbLogError.IsChecked) { 'ERROR' }
+                          else { 'ALL' }
+                if ($filter -eq 'ALL' -or $Level -eq $filter -or ($filter -eq 'INFO' -and $Level -eq 'OK')) {
+                    $script:Controls.txtLogDrawer.AppendText("$line`r`n")
+                    $script:Controls.txtLogDrawer.ScrollToEnd()
+                }
+            }) | Out-Null
         }
     }
     catch { }
@@ -346,6 +408,7 @@ function Get-DefaultAppConfig {
             BudgetLimitUsd        = 50.0
             PreferredCurrency     = 'USD'
         }
+        RecentRoutes         = @()
     }
 }
 Set-Item -Path "function:global:Get-DefaultAppConfig" -Value (Get-Item "function:Get-DefaultAppConfig").ScriptBlock -ErrorAction SilentlyContinue
@@ -411,6 +474,12 @@ function Load-AppConfig {
             if ($u.PreferredCurrency)  { $result.ApiUsage.PreferredCurrency = [string]$u.PreferredCurrency }
         }
 
+        if ($cfg.RecentRoutes) {
+            $result.RecentRoutes = @($cfg.RecentRoutes)
+        } else {
+            $result.RecentRoutes = @()
+        }
+
         $script:AppConfig = $result
         $script:CurrentLanguage = $result.Language
         return $result
@@ -462,6 +531,7 @@ function Save-AppConfig {
             AvoidFerries        = [bool]$Config.AvoidFerries
             OverlayConfig       = $Config.OverlayConfig
             ApiUsage            = $Config.ApiUsage
+            RecentRoutes        = if ($Config.RecentRoutes) { @($Config.RecentRoutes) } else { @() }
         }
 
         $json = $toSave | ConvertTo-Json -Depth 10
@@ -478,6 +548,41 @@ function Save-AppConfig {
     }
 }
 Set-Item -Path "function:global:Save-AppConfig" -Value (Get-Item "function:Save-AppConfig").ScriptBlock -ErrorAction SilentlyContinue
+
+function Add-RecentRouteConfig {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Start,
+        [Parameter(Mandatory = $true)][string]$End,
+        [Parameter()][string[]]$Waypoints = @(),
+        [Parameter()][string]$RouteName = '',
+        [Parameter()][string]$RouteType = 'Fastest'
+    )
+    if ([string]::IsNullOrWhiteSpace($Start) -or [string]::IsNullOrWhiteSpace($End)) { return }
+    if (-not $script:AppConfig) { $script:AppConfig = Load-AppConfig }
+    if (-not $script:AppConfig.RecentRoutes) { $script:AppConfig.RecentRoutes = @() }
+
+    $newItem = [ordered]@{
+        Start     = $Start.Trim()
+        End       = $End.Trim()
+        Waypoints = @($Waypoints)
+        Name      = if ($RouteName) { $RouteName.Trim() } else { "$($Start.Trim()) -> $($End.Trim())" }
+        RouteType = $RouteType
+        Timestamp = (Get-Date).ToString('yyyy-MM-dd HH:mm')
+    }
+
+    $list = [System.Collections.Generic.List[object]]::new()
+    $list.Add($newItem)
+    foreach ($r in $script:AppConfig.RecentRoutes) {
+        if (-not ($r.Start -eq $newItem.Start -and $r.End -eq $newItem.End)) {
+            $list.Add($r)
+            if ($list.Count -ge 10) { break }
+        }
+    }
+    $script:AppConfig.RecentRoutes = @($list.ToArray())
+    Save-AppConfig -Config $script:AppConfig
+}
+Set-Item -Path "function:global:Add-RecentRouteConfig" -Value (Get-Item "function:Add-RecentRouteConfig").ScriptBlock -ErrorAction SilentlyContinue
 
 function Update-ApiUsageRecord {
     [CmdletBinding()]
@@ -517,3 +622,87 @@ function Update-ApiUsageRecord {
     Save-AppConfig -Config $script:AppConfig | Out-Null
 }
 Set-Item -Path "function:global:Update-ApiUsageRecord" -Value (Get-Item "function:Update-ApiUsageRecord").ScriptBlock -ErrorAction SilentlyContinue
+
+$script:ToastTimer = $null
+
+function Show-AppToastNotification {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Title,
+        [Parameter(Mandatory = $true)][string]$Message,
+        [Parameter()][ValidateSet('Success', 'Info', 'Warning', 'Error')][string]$Type = 'Success',
+        [Parameter()][string]$ActionFile = '',
+        [Parameter()][string]$ActionFolder = '',
+        [Parameter()][int]$DurationSec = 6
+    )
+
+    if (-not $script:Controls -or -not $script:Controls.pnlToastContainer) { return }
+
+    $w = if ($script:Controls -and $script:Controls.Window) { $script:Controls.Window } elseif ($script:MainWindow) { $script:MainWindow } else { [System.Windows.Application]::Current.MainWindow }
+    if ($w -and $w.Dispatcher -and -not $w.Dispatcher.CheckAccess()) {
+        $w.Dispatcher.BeginInvoke([Action]{
+            Show-AppToastNotification -Title $Title -Message $Message -Type $Type -ActionFile $ActionFile -ActionFolder $ActionFolder -DurationSec $DurationSec
+        }) | Out-Null
+        return
+    }
+
+    $ctrl = $script:Controls
+    $icon = switch ($Type) {
+        'Success' { '✅' }
+        'Info'    { 'ℹ️' }
+        'Warning' { '⚠️' }
+        'Error'   { '❌' }
+    }
+    $borderColor = switch ($Type) {
+        'Success' { '#10B981' }
+        'Info'    { '#38BDF8' }
+        'Warning' { '#F59E0B' }
+        'Error'   { '#EF4444' }
+    }
+
+    if ($ctrl.txtToastIcon) { $ctrl.txtToastIcon.Text = $icon }
+    if ($ctrl.txtToastTitle) { $ctrl.txtToastTitle.Text = $Title }
+    if ($ctrl.txtToastMessage) { $ctrl.txtToastMessage.Text = $Message }
+    $ctrl.pnlToastContainer.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString($borderColor)
+
+    if ($ctrl.btnToastAction) {
+        if (-not [string]::IsNullOrWhiteSpace($ActionFile) -and (Test-Path $ActionFile)) {
+            $ctrl.btnToastAction.Visibility = [System.Windows.Visibility]::Visible
+            $ctrl.btnToastAction.Tag = $ActionFile
+        } else {
+            $ctrl.btnToastAction.Visibility = [System.Windows.Visibility]::Collapsed
+        }
+    }
+
+    if ($ctrl.btnToastActionFolder) {
+        $folderToOpen = if (-not [string]::IsNullOrWhiteSpace($ActionFolder) -and (Test-Path $ActionFolder)) {
+            $ActionFolder
+        } elseif (-not [string]::IsNullOrWhiteSpace($ActionFile) -and (Test-Path $ActionFile)) {
+            [System.IO.Path]::GetDirectoryName($ActionFile)
+        } else { '' }
+
+        if (-not [string]::IsNullOrWhiteSpace($folderToOpen) -and (Test-Path $folderToOpen)) {
+            $ctrl.btnToastActionFolder.Visibility = [System.Windows.Visibility]::Visible
+            $ctrl.btnToastActionFolder.Tag = $folderToOpen
+        } else {
+            $ctrl.btnToastActionFolder.Visibility = [System.Windows.Visibility]::Collapsed
+        }
+    }
+
+    $ctrl.pnlToastContainer.Visibility = [System.Windows.Visibility]::Visible
+
+    # Auto-dismiss timer
+    if ($script:ToastTimer) {
+        try { $script:ToastTimer.Stop() } catch { }
+    }
+    $script:ToastTimer = [System.Windows.Threading.DispatcherTimer]::new()
+    $script:ToastTimer.Interval = [TimeSpan]::FromSeconds($DurationSec)
+    $script:ToastTimer.Add_Tick({
+        if ($script:Controls -and $script:Controls.pnlToastContainer) {
+            $script:Controls.pnlToastContainer.Visibility = [System.Windows.Visibility]::Collapsed
+        }
+        if ($script:ToastTimer) { $script:ToastTimer.Stop() }
+    })
+    $script:ToastTimer.Start()
+}
+Set-Item -Path "function:global:Show-AppToastNotification" -Value (Get-Item "function:Show-AppToastNotification").ScriptBlock -ErrorAction SilentlyContinue

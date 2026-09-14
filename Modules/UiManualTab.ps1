@@ -49,6 +49,7 @@ function Register-UiManualTabEvents {
     )
 
     $script:Controls = $Controls
+    $script:SuppressAutosuggest = $false
     foreach ($k in $Controls.Keys) {
         Set-Variable -Name $k -Value $Controls[$k] -Scope Script -Force
         Set-Variable -Name "script:$k" -Value $Controls[$k] -Scope Script -Force
@@ -90,12 +91,38 @@ function Register-UiManualTabEvents {
         'btnOpenMaps'        = $Controls.btnOpenGoogleMaps
         'btnCopyUrl'         = $Controls.btnCopyUrl
         'btnSaveMapAs'       = $Controls.btnSaveMapAs
-        'btnExportPdf'       = $Controls.btnManualExportPdf
-        'btnExportGpx'       = $Controls.btnManualExportGpx
-        'btnExportKml'       = $Controls.btnManualExportKml
-        'lblFooter'          = $Controls.lblFooterStatus
-        'txtOutputDir'       = $Controls.txtSettingsOutputDir
-        'tabMain'            = $Controls.tabMain
+        'btnExportPdf'           = $Controls.btnManualExportPdf
+        'btnExportGpx'           = $Controls.btnManualExportGpx
+        'btnExportKml'           = $Controls.btnManualExportKml
+        'btnManualExportPackage' = $Controls.btnManualExportPackage
+        'lblFooter'              = $Controls.lblFooterStatus
+        'txtOutputDir'           = $Controls.txtSettingsOutputDir
+        'tabMain'                = $Controls.tabMain
+        'btnSwapEndpoints'       = $Controls.btnSwapEndpoints
+        'btnResetManualForm'     = $Controls.btnResetManualForm
+        'cmbRecentRoutes'        = $Controls.cmbRecentRoutes
+        'lblManualRecentRoutes'  = $Controls.lblManualRecentRoutes
+        'lblCopyFeedback'        = $Controls.lblCopyFeedback
+        'btnToggleInputPanel'    = $Controls.btnToggleInputPanel
+        'colManualInput'         = $Controls.colManualInput
+        'badgeStartGeocode'      = $Controls.badgeStartGeocode
+        'badgeEndGeocode'        = $Controls.badgeEndGeocode
+        'popSuggestStart'        = $Controls.popSuggestStart
+        'lstSuggestStart'        = $Controls.lstSuggestStart
+        'popSuggestEnd'          = $Controls.popSuggestEnd
+        'lstSuggestEnd'          = $Controls.lstSuggestEnd
+        'popSuggestWp'           = $Controls.popSuggestWp
+        'lstSuggestWp'           = $Controls.lstSuggestWp
+        'drawerLog'              = $Controls.drawerLog
+        'txtLogDrawer'           = $Controls.txtLogDrawer
+        'btnToggleLogDrawer'     = $Controls.btnToggleLogDrawer
+        'btnCloseLogDrawer'      = $Controls.btnCloseLogDrawer
+        'btnClearLogDrawer'      = $Controls.btnClearLogDrawer
+        'btnCopyLogDrawer'       = $Controls.btnCopyLogDrawer
+        'rbLogAll'               = $Controls.rbLogAll
+        'rbLogInfo'              = $Controls.rbLogInfo
+        'rbLogWarn'              = $Controls.rbLogWarn
+        'rbLogError'             = $Controls.rbLogError
     }
 
     foreach ($entry in $aliases.GetEnumerator()) {
@@ -309,7 +336,7 @@ function Register-UiManualTabEvents {
                         }
 
                         $script:LastGoogleMapsUrl = if ($calc.MapyComUrl) { $calc.MapyComUrl } else { $calc.GoogleMapsUrl }
-                        $lblUrlDisplay.Text = $calc.GoogleMapsUrl
+                        $lblUrlDisplay.Text = if ($script:LastGoogleMapsUrl) { $script:LastGoogleMapsUrl } else { 'Generated route ready' }
                         $btnOpenMaps.IsEnabled = $true
                         $btnCopyUrl.IsEnabled = $true
                         $btnExportPdf.IsEnabled = $true
@@ -340,12 +367,37 @@ function Register-UiManualTabEvents {
                         }
 
                         Update-MapViewMode
+
+                        # Save to Recent Routes (Milestone 1)
+                        try {
+                            Add-RecentRouteConfig -Start $txtStart.Text -End $txtEnd.Text -Waypoints @($lstWp.Items) -RouteName $txtName.Text -RouteType $calc.RouteType
+                            if ($PopulateRecentRoutes) { & $PopulateRecentRoutes }
+                            if ($btnManualExportPackage) { $btnManualExportPackage.IsEnabled = $true }
+                        } catch { }
+
+                        # Update geocode badges
+                        if ($Controls.badgeStartGeocode) {
+                            $Controls.badgeStartGeocode.Text = '🟢 Exact'
+                            $Controls.badgeStartGeocode.Foreground = [System.Windows.Media.Brushes]::LimeGreen
+                        }
+                        if ($Controls.badgeEndGeocode) {
+                            $Controls.badgeEndGeocode.Text = '🟢 Exact'
+                            $Controls.badgeEndGeocode.Foreground = [System.Windows.Media.Brushes]::LimeGreen
+                        }
                     }
                     else {
                         $lblStatus.Text = '✕ Error'
                         $lblStatus.Foreground = [System.Windows.Media.Brushes]::Salmon
                         $lblFooter.Text = "Error: $($calc.Error)"
-                        [System.Windows.MessageBox]::Show($calc.Error, 'Route Error', 'OK', 'Error')
+                        if ($Controls.badgeStartGeocode) {
+                            $Controls.badgeStartGeocode.Text = '🔴 Error'
+                            $Controls.badgeStartGeocode.Foreground = [System.Windows.Media.Brushes]::Salmon
+                        }
+                        if ($Controls.badgeEndGeocode) {
+                            $Controls.badgeEndGeocode.Text = '🔴 Error'
+                            $Controls.badgeEndGeocode.Foreground = [System.Windows.Media.Brushes]::Salmon
+                        }
+                        Show-AppToastNotification -Title "Route Error" -Message $calc.Error -Type Error
                     }
                 }
                 catch {
@@ -371,6 +423,210 @@ function Register-UiManualTabEvents {
         $timer.Start()
     })
 
+    # Milestone 1: Return-trip Swap Origin and Destination
+    if ($btnSwapEndpoints) {
+        $btnSwapEndpoints.Add_Click({
+            $script:SuppressAutosuggest = $true
+            try {
+                $temp = $txtStart.Text
+                $txtStart.Text = $txtEnd.Text
+                $txtEnd.Text = $temp
+
+                if ($lstWp.Items.Count -gt 1) {
+                    $items = @($lstWp.Items)
+                    [array]::Reverse($items)
+                    $lstWp.Items.Clear()
+                    foreach ($it in $items) { $lstWp.Items.Add($it) | Out-Null }
+                }
+
+                if ($txtName.Text -match '^(?:Route|Trasa)\s+(.+)\s+-\s+(.+)$') {
+                    $txtName.Text = "Route $($txtStart.Text) - $($txtEnd.Text)"
+                }
+                if ($Controls.badgeStartGeocode -and $Controls.badgeEndGeocode) {
+                    $tempBadgeText = $Controls.badgeStartGeocode.Text
+                    $tempBadgeFg   = $Controls.badgeStartGeocode.Foreground
+                    $tempBadgeTip  = $Controls.badgeStartGeocode.ToolTip
+
+                    $Controls.badgeStartGeocode.Text       = $Controls.badgeEndGeocode.Text
+                    $Controls.badgeStartGeocode.Foreground = $Controls.badgeEndGeocode.Foreground
+                    $Controls.badgeStartGeocode.ToolTip    = $Controls.badgeEndGeocode.ToolTip
+
+                    $Controls.badgeEndGeocode.Text       = $tempBadgeText
+                    $Controls.badgeEndGeocode.Foreground = $tempBadgeFg
+                    $Controls.badgeEndGeocode.ToolTip    = $tempBadgeTip
+                }
+                $lblStatus.Text = "⇄ Endpoints swapped for return trip"
+                $lblStatus.Foreground = [System.Windows.Media.Brushes]::LightGreen
+            }
+            finally {
+                $script:SuppressAutosuggest = $false
+            }
+        })
+    }
+
+    # Milestone 1: Reset Form
+    if ($btnResetManualForm) {
+        $btnResetManualForm.Add_Click({
+            $script:SuppressAutosuggest = $true
+            try {
+                $txtStart.Text = ''
+                $txtEnd.Text = ''
+                $txtNewWp.Text = ''
+                $lstWp.Items.Clear()
+                $txtName.Text = ''
+                $lblDist.Text = '— km'
+                $lblTime.Text = '— min'
+                $lblStatus.Text = 'Form reset'
+                $lblStatus.Foreground = [System.Windows.Media.Brushes]::Gray
+                if ($Controls.badgeStartGeocode) { $Controls.badgeStartGeocode.Text = '' }
+                if ($Controls.badgeEndGeocode) { $Controls.badgeEndGeocode.Text = '' }
+                $script:LastManualResult = $null
+                $script:LastGoogleMapsUrl = ''
+                $lblUrlDisplay.Text = 'No generated link'
+                $btnExportPdf.IsEnabled = $false
+                $btnExportGpx.IsEnabled = $false
+                $btnExportKml.IsEnabled = $false
+                $btnOpenMaps.IsEnabled = $false
+                $btnCopyUrl.IsEnabled = $false
+                $btnSaveMapAs.IsEnabled = $false
+                if ($btnManualExportPackage) { $btnManualExportPackage.IsEnabled = $false }
+                Update-MapViewMode
+            }
+            finally {
+                $script:SuppressAutosuggest = $false
+            }
+        })
+    }
+
+    # Milestone 1: Recent Routes Populator & Selection Handler
+    $PopulateRecentRoutes = {
+        if (-not $cmbRecentRoutes) { return }
+        $cmbRecentRoutes.Items.Clear()
+        $placeholder = [System.Windows.Controls.ComboBoxItem]::new()
+        $placeholder.Content = (Get-LocText 'ManualRecentSelectPlaceholder' '-- Select Recent Route --')
+        $placeholder.Tag = $null
+        $cmbRecentRoutes.Items.Add($placeholder) | Out-Null
+        $cmbRecentRoutes.SelectedIndex = 0
+
+        if ($script:AppConfig -and $script:AppConfig.RecentRoutes) {
+            foreach ($r in $script:AppConfig.RecentRoutes) {
+                $item = [System.Windows.Controls.ComboBoxItem]::new()
+                $display = if ($r.Name) { "$($r.Name) ($($r.Timestamp))" } else { "$($r.Start) -> $($r.End)" }
+                $item.Content = $display
+                $item.Tag = $r
+                $cmbRecentRoutes.Items.Add($item) | Out-Null
+            }
+        }
+    }
+    & $PopulateRecentRoutes
+
+    if ($cmbRecentRoutes) {
+        $cmbRecentRoutes.Add_SelectionChanged({
+            if ($cmbRecentRoutes.SelectedItem -and $cmbRecentRoutes.SelectedItem.Tag) {
+                $r = $cmbRecentRoutes.SelectedItem.Tag
+                $script:SuppressAutosuggest = $true
+                try {
+                    if ($r.Start) { $txtStart.Text = $r.Start }
+                    if ($r.End) { $txtEnd.Text = $r.End }
+                    if ($r.Name) { $txtName.Text = $r.Name }
+                    $lstWp.Items.Clear()
+                    if ($r.Waypoints) {
+                        foreach ($w in $r.Waypoints) {
+                            if (-not [string]::IsNullOrWhiteSpace($w)) { $lstWp.Items.Add($w) | Out-Null }
+                        }
+                    }
+                    if ($Controls.badgeStartGeocode) {
+                        $Controls.badgeStartGeocode.Text = '🟢 Exact'
+                        $Controls.badgeStartGeocode.Foreground = [System.Windows.Media.Brushes]::LimeGreen
+                        $Controls.badgeStartGeocode.ToolTip = "Restored from history"
+                    }
+                    if ($Controls.badgeEndGeocode) {
+                        $Controls.badgeEndGeocode.Text = '🟢 Exact'
+                        $Controls.badgeEndGeocode.Foreground = [System.Windows.Media.Brushes]::LimeGreen
+                        $Controls.badgeEndGeocode.ToolTip = "Restored from history"
+                    }
+                }
+                finally {
+                    $script:SuppressAutosuggest = $false
+                }
+            }
+        })
+    }
+
+    # Milestone 1: Click-to-copy handlers on stat cards
+    $copyAction = {
+        param($src)
+        if ($src -and -not [string]::IsNullOrWhiteSpace($src.Text) -and $src.Text -ne '— km' -and $src.Text -ne '— min' -and $src.Text -ne 'No generated link') {
+            try {
+                [System.Windows.Clipboard]::SetText($src.Text)
+                if ($lblCopyFeedback) {
+                    $lblCopyFeedback.Visibility = [System.Windows.Visibility]::Visible
+                    $script:FeedbackTimer = [System.Windows.Threading.DispatcherTimer]::new()
+                    $script:FeedbackTimer.Interval = [TimeSpan]::FromSeconds(2)
+                    $script:FeedbackTimer.Add_Tick({
+                        if ($lblCopyFeedback) { $lblCopyFeedback.Visibility = [System.Windows.Visibility]::Collapsed }
+                        if ($script:FeedbackTimer) { $script:FeedbackTimer.Stop() }
+                    })
+                    $script:FeedbackTimer.Start()
+                }
+            } catch { }
+        }
+    }
+    if ($lblDist) { $lblDist.Add_PreviewMouseLeftButtonUp({ & $copyAction $this }) }
+    if ($lblTime) { $lblTime.Add_PreviewMouseLeftButtonUp({ & $copyAction $this }) }
+    if ($lblType) { $lblType.Add_PreviewMouseLeftButtonUp({ & $copyAction $this }) }
+    if ($lblUrlDisplay) { $lblUrlDisplay.Add_PreviewMouseLeftButtonUp({ & $copyAction $this }) }
+
+    # Milestone 5: Full Map toggle panel
+    if ($btnToggleInputPanel -and $colManualInput) {
+        $btnToggleInputPanel.Add_Click({
+            if ($colManualInput.Width.Value -gt 0) {
+                $script:PrevManualWidth = $colManualInput.Width.Value
+                $colManualInput.Width = [System.Windows.GridLength]::new(0)
+                $btnToggleInputPanel.Content = '▶ Show Panel'
+            } else {
+                $targetW = if ($script:PrevManualWidth -gt 50) { $script:PrevManualWidth } else { 430 }
+                $colManualInput.Width = [System.Windows.GridLength]::new($targetW)
+                $btnToggleInputPanel.Content = '◀ Full Map'
+            }
+        })
+    }
+
+    # Milestone 1: Keyboard Shortcuts on Window
+    if ($Window) {
+        $Window.Add_KeyDown({
+            param($s, $e)
+            if ($e.Key -eq [System.Windows.Input.Key]::Enter -and ($e.KeyboardDevice.Modifiers -band [System.Windows.Input.ModifierKeys]::Control)) {
+                if ($btnCalculate -and $btnCalculate.IsEnabled) {
+                    $btnCalculate.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent))
+                    $e.Handled = $true
+                }
+            }
+            elseif ($e.Key -eq [System.Windows.Input.Key]::N -and ($e.KeyboardDevice.Modifiers -band [System.Windows.Input.ModifierKeys]::Control)) {
+                if ($btnResetManualForm) {
+                    $btnResetManualForm.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent))
+                    $e.Handled = $true
+                }
+            }
+            elseif ($e.Key -eq [System.Windows.Input.Key]::Escape) {
+                if ($Controls.popSuggestStart) { $Controls.popSuggestStart.IsOpen = $false }
+                if ($Controls.popSuggestEnd) { $Controls.popSuggestEnd.IsOpen = $false }
+                if ($Controls.popSuggestWp) { $Controls.popSuggestWp.IsOpen = $false }
+                if ($Controls.pnlToastContainer) { $Controls.pnlToastContainer.Visibility = [System.Windows.Visibility]::Collapsed }
+                if ($Controls.drawerLog -and $Controls.drawerLog.Visibility -eq [System.Windows.Visibility]::Visible) {
+                    $Controls.drawerLog.Visibility = [System.Windows.Visibility]::Collapsed
+                }
+                if ($btnCalculate -and -not $btnCalculate.IsEnabled) {
+                    $lblStatus.Text = 'Calculation cancelled.'
+                    $lblStatus.Foreground = [System.Windows.Media.Brushes]::OrangeRed
+                    $btnCalculate.IsEnabled = $true
+                    $btnCalculate.Content = (Get-LocText 'ManualBtnCalculate' '🚀 CALCULATE ROUTE & DOWNLOAD MAP')
+                    $e.Handled = $true
+                }
+            }
+        })
+    }
+
     # External navigation links
     $btnOpenMaps.Add_Click({
         if ($script:LastGoogleMapsUrl) { Start-Process $script:LastGoogleMapsUrl }
@@ -379,7 +635,7 @@ function Register-UiManualTabEvents {
     $btnCopyUrl.Add_Click({
         if ($script:LastGoogleMapsUrl) {
             [System.Windows.Clipboard]::SetText($script:LastGoogleMapsUrl)
-            [System.Windows.MessageBox]::Show((Get-LocText 'MsgUrlCopied' 'Link copied to clipboard!'), (Get-LocText 'MsgUrlCopiedTitle' 'Copied'), 'OK', 'Information')
+            Show-AppToastNotification -Title (Get-LocText 'MsgUrlCopiedTitle' 'Copied') -Message (Get-LocText 'MsgUrlCopied' 'Link copied to clipboard!') -Type Info
         }
     })
 
@@ -391,12 +647,12 @@ function Register-UiManualTabEvents {
             $dlg.FileName = [System.IO.Path]::GetFileName($script:LastGeneratedMapPath)
             if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
                 Copy-Item -LiteralPath $script:LastGeneratedMapPath -Destination $dlg.FileName -Force
-                [System.Windows.MessageBox]::Show(((Get-LocText 'MsgMapSaved' 'Map saved to: {0}') -f $dlg.FileName), (Get-LocText 'MsgMapSavedTitle' 'Saved'), 'OK', 'Information')
+                Show-AppToastNotification -Title (Get-LocText 'MsgMapSavedTitle' 'Saved') -Message (((Get-LocText 'MsgMapSaved' 'Map saved to: {0}') -f $dlg.FileName)) -Type Success -ActionFile $dlg.FileName
             }
         }
     })
 
-    # Feature 5.O: Export PDF Report
+    # Export PDF Report
     $btnExportPdf.Add_Click({
         if (-not $script:LastManualResult) { return }
         $r = $script:LastManualResult
@@ -416,18 +672,15 @@ function Register-UiManualTabEvents {
                     -DestAddress $r.DestAddress -DestLat $r.DestLat -DestLng $r.DestLng `
                     -Waypoints $r.Waypoints -MapImagePath $r.MapPath -GoogleMapsUrl $r.GoogleMapsUrl
 
-                $ask = [System.Windows.MessageBox]::Show("PDF report generated successfully:`n$($dlg.FileName)`n`nDo you want to open it now?", "PDF Export", "YesNo", "Information")
-                if ($ask -eq [System.Windows.MessageBoxResult]::Yes) {
-                    Start-Process $dlg.FileName
-                }
+                Show-AppToastNotification -Title "PDF Exported" -Message "Report generated: $($dlg.FileName)" -Type Success -ActionFile $dlg.FileName
             }
             catch {
-                [System.Windows.MessageBox]::Show("Failed to export PDF report:`n$($_.Exception.Message)", "Export Error", "OK", "Error")
+                Show-AppToastNotification -Title "Export Error" -Message "Failed to export PDF: $($_.Exception.Message)" -Type Error
             }
         }
     })
 
-    # Feature 5.P: Export GPX
+    # Export GPX
     $btnExportGpx.Add_Click({
         if (-not $script:LastManualResult -or -not $script:LastManualResult.EncodedPolyline) { return }
         $r = $script:LastManualResult
@@ -443,15 +696,15 @@ function Register-UiManualTabEvents {
                     -EncodedPolyline $r.EncodedPolyline `
                     -Waypoints $r.Waypoints `
                     -DistanceKm $r.DistanceKm -DurationMin $r.DurationMin
-                [System.Windows.MessageBox]::Show("GPX track exported successfully:`n$($dlg.FileName)", "GPX Export", "OK", "Information")
+                Show-AppToastNotification -Title "GPX Exported" -Message "Track saved: $($dlg.FileName)" -Type Success -ActionFile $dlg.FileName
             }
             catch {
-                [System.Windows.MessageBox]::Show("Failed to export GPX:`n$($_.Exception.Message)", "Export Error", "OK", "Error")
+                Show-AppToastNotification -Title "Export Error" -Message "Failed to export GPX: $($_.Exception.Message)" -Type Error
             }
         }
     })
 
-    # Feature 5.P: Export KML
+    # Export KML
     $btnExportKml.Add_Click({
         if (-not $script:LastManualResult -or -not $script:LastManualResult.EncodedPolyline) { return }
         $r = $script:LastManualResult
@@ -467,13 +720,210 @@ function Register-UiManualTabEvents {
                     -EncodedPolyline $r.EncodedPolyline `
                     -Waypoints $r.Waypoints `
                     -DistanceKm $r.DistanceKm -DurationMin $r.DurationMin
-                [System.Windows.MessageBox]::Show("KML track exported successfully:`n$($dlg.FileName)", "KML Export", "OK", "Information")
+                Show-AppToastNotification -Title "KML Exported" -Message "Track saved: $($dlg.FileName)" -Type Success -ActionFile $dlg.FileName
             }
             catch {
-                [System.Windows.MessageBox]::Show("Failed to export KML:`n$($_.Exception.Message)", "Export Error", "OK", "Error")
+                Show-AppToastNotification -Title "Export Error" -Message "Failed to export KML: $($_.Exception.Message)" -Type Error
             }
         }
     })
+
+    # Milestone 5: One-Click All Formats Package Export (PNG, PDF, GPX)
+    if ($btnManualExportPackage) {
+        $btnManualExportPackage.Add_Click({
+            if (-not $script:LastManualResult) { return }
+            $r = $script:LastManualResult
+            $baseDir = if ($txtOutputDir.Text -and (Test-Path $txtOutputDir.Text)) { $txtOutputDir.Text } else { [Environment]::GetFolderPath('MyDocuments') }
+            $safeName = if ($txtName.Text) { ($txtName.Text -replace '[^\w\d_-]+', '_') } else { "Route_$($r.DistanceKm)km" }
+            $pkgDir = Join-Path $baseDir "$($safeName)_$((Get-Date).ToString('yyyyMMdd_HHmmss'))"
+            try {
+                [System.IO.Directory]::CreateDirectory($pkgDir) | Out-Null
+
+                # 1. Save Map PNG
+                if ($r.MapPath -and (Test-Path $r.MapPath)) {
+                    Copy-Item -LiteralPath $r.MapPath -Destination (Join-Path $pkgDir "Map_$($r.DistanceKm)km.png") -Force
+                }
+
+                # 2. Export PDF
+                $pdfPath = Join-Path $pkgDir "Report_$($r.DistanceKm)km.pdf"
+                Export-RoutePdfReport -OutputPath $pdfPath `
+                    -RouteName $safeName `
+                    -DistanceKm $r.DistanceKm -DurationMin $r.DurationMin `
+                    -RouteType $r.RouteType `
+                    -AvoidTolls $r.AvoidTolls -AvoidHighways $r.AvoidHighways -AvoidFerries $r.AvoidFerries `
+                    -OriginAddress $r.OriginAddress -OriginLat $r.OriginLat -OriginLng $r.OriginLng `
+                    -DestAddress $r.DestAddress -DestLat $r.DestLat -DestLng $r.DestLng `
+                    -Waypoints $r.Waypoints -MapImagePath $r.MapPath -GoogleMapsUrl $r.GoogleMapsUrl
+
+                # 3. Export GPX
+                if ($r.EncodedPolyline) {
+                    $gpxPath = Join-Path $pkgDir "Track_$($r.DistanceKm)km.gpx"
+                    Export-RouteGpx -OutputPath $gpxPath `
+                        -RouteName $safeName `
+                        -EncodedPolyline $r.EncodedPolyline `
+                        -Waypoints $r.Waypoints `
+                        -DistanceKm $r.DistanceKm -DurationMin $r.DurationMin
+                }
+
+                Show-AppToastNotification -Title "Package Export Complete" -Message "Map, PDF, and GPX saved to folder." -Type Success -ActionFolder $pkgDir
+            }
+            catch {
+                Show-AppToastNotification -Title "Package Export Error" -Message $_.Exception.Message -Type Error
+            }
+        })
+    }
+
+    # Milestone 2: Debounced Address Autosuggest Setup
+    $setupAutosuggest = {
+        param($textBox, $popup, $listBox, $badge)
+        if (-not $textBox -or -not $popup -or -not $listBox) { return }
+
+        $isSelecting = $false
+
+        $timer = [System.Windows.Threading.DispatcherTimer]::new()
+        $timer.Interval = [TimeSpan]::FromMilliseconds(350)
+        $timer.Add_Tick({
+            $timer.Stop()
+            if ($script:SuppressAutosuggest -or $isSelecting) { return }
+            $q = $textBox.Text.Trim()
+            if ($q.Length -lt 2) {
+                $popup.IsOpen = $false
+                return
+            }
+            $apiKey = if (Get-Command Get-CurrentApiKey -ErrorAction SilentlyContinue) { Get-CurrentApiKey } else { $script:AppConfig.ApiKey }
+            if ([string]::IsNullOrWhiteSpace($apiKey)) { return }
+
+            try {
+                $results = Get-MapySuggest -Query $q -ApiKey $apiKey -Limit 5 -LanguageCode $script:CurrentLanguage
+                $listBox.Items.Clear()
+                if ($results -and @($results).Count -gt 0) {
+                    foreach ($r in $results) {
+                        $item = [System.Windows.Controls.ListBoxItem]::new()
+                        $item.Content = "📍 $($r.FullText)"
+                        $item.Tag = $r
+                        $listBox.Items.Add($item) | Out-Null
+                    }
+                    if ($popup.Child) {
+                        $popup.Child.Width = [math]::Max(360, $textBox.ActualWidth)
+                    }
+                    $popup.PlacementTarget = $textBox
+                    $popup.IsOpen = $true
+                } else {
+                    $popup.IsOpen = $false
+                }
+            }
+            catch {
+                $popup.IsOpen = $false
+            }
+        })
+
+        $textBox.Add_TextChanged({
+            if ($script:SuppressAutosuggest -or $isSelecting) { return }
+            if ($badge) { $badge.Text = '' }
+            $timer.Stop()
+            $timer.Start()
+        })
+
+        $textBox.Add_KeyDown({
+            param($s, $e)
+            if ($e.Key -eq [System.Windows.Input.Key]::Down -and $popup.IsOpen -and $listBox.Items.Count -gt 0) {
+                $listBox.Focus()
+                if ($listBox.SelectedIndex -lt 0) {
+                    $listBox.SelectedIndex = 0
+                }
+                $e.Handled = $true
+            }
+            elseif ($e.Key -eq [System.Windows.Input.Key]::Escape -and $popup.IsOpen) {
+                $popup.IsOpen = $false
+                $e.Handled = $true
+            }
+        })
+
+        $commitSelection = {
+            if ($listBox.SelectedItem) {
+                $sel = $listBox.SelectedItem.Tag
+                if ($sel) {
+                    $isSelecting = $true
+                    $timer.Stop()
+                    $textBox.Text = $sel.FullText
+                    if ($badge) {
+                        $badge.Text = "🟢 Exact"
+                        $badge.Foreground = [System.Windows.Media.Brushes]::LimeGreen
+                        $badge.ToolTip = "Coordinates: $($sel.Latitude), $($sel.Longitude)"
+                    }
+                    $isSelecting = $false
+                }
+                $popup.IsOpen = $false
+                $listBox.SelectedIndex = -1
+                $textBox.Focus()
+                $textBox.CaretIndex = $textBox.Text.Length
+            }
+        }
+
+        $listBox.Add_PreviewMouseLeftButtonUp({
+            & $commitSelection
+        })
+
+        $listBox.Add_KeyDown({
+            param($s, $e)
+            if ($e.Key -eq [System.Windows.Input.Key]::Enter -or $e.Key -eq [System.Windows.Input.Key]::Return) {
+                & $commitSelection
+                $e.Handled = $true
+            }
+            elseif ($e.Key -eq [System.Windows.Input.Key]::Escape) {
+                $popup.IsOpen = $false
+                $textBox.Focus()
+                $e.Handled = $true
+            }
+        })
+    }
+
+    & $setupAutosuggest $txtStart $Controls.popSuggestStart $Controls.lstSuggestStart $Controls.badgeStartGeocode
+    & $setupAutosuggest $txtEnd $Controls.popSuggestEnd $Controls.lstSuggestEnd $Controls.badgeEndGeocode
+    & $setupAutosuggest $txtNewWp $Controls.popSuggestWp $Controls.lstSuggestWp $null
+
+    # Milestone 4: Collapsible Activity Log Drawer Events
+    if ($Controls.btnToggleLogDrawer) {
+        $Controls.btnToggleLogDrawer.Add_Click({
+            if ($Controls.drawerLog) {
+                if ($Controls.drawerLog.Visibility -eq [System.Windows.Visibility]::Visible) {
+                    $Controls.drawerLog.Visibility = [System.Windows.Visibility]::Collapsed
+                } else {
+                    $Controls.drawerLog.Visibility = [System.Windows.Visibility]::Visible
+                    Update-LogDrawerDisplay
+                }
+            }
+        })
+    }
+
+    if ($Controls.btnCloseLogDrawer) {
+        $Controls.btnCloseLogDrawer.Add_Click({
+            if ($Controls.drawerLog) { $Controls.drawerLog.Visibility = [System.Windows.Visibility]::Collapsed }
+        })
+    }
+
+    if ($Controls.btnClearLogDrawer) {
+        $Controls.btnClearLogDrawer.Add_Click({
+            Clear-AppLogDrawer
+        })
+    }
+
+    if ($Controls.btnCopyLogDrawer) {
+        $Controls.btnCopyLogDrawer.Add_Click({
+            if ($Controls.txtLogDrawer -and -not [string]::IsNullOrWhiteSpace($Controls.txtLogDrawer.Text)) {
+                [System.Windows.Clipboard]::SetText($Controls.txtLogDrawer.Text)
+                Show-AppToastNotification -Title "Log Copied" -Message "Activity log copied to clipboard." -Type Info
+            }
+        })
+    }
+
+    foreach ($rb in @($Controls.rbLogAll, $Controls.rbLogInfo, $Controls.rbLogWarn, $Controls.rbLogError)) {
+        if ($rb) {
+            $rb.Add_Checked({
+                Update-LogDrawerDisplay
+            })
+        }
+    }
 
     # Initialize map view mode based on configuration
     if ($script:AppConfig -and ($false -eq $script:AppConfig.UseInteractiveMap)) {
