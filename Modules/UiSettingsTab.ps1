@@ -8,8 +8,22 @@
     API usage tracking & cost estimation (Feature 6.S).
 .NOTES
     Encoding: UTF-8 with BOM
+    Compatibility: Windows PowerShell 5.1 and PowerShell 7+
 #>
 
+#region 1. API Usage Metrics & Telemetry Display
+
+<#
+.SYNOPSIS
+    Updates the session and monthly API usage count badges in the Settings UI.
+.DESCRIPTION
+    Aggregates session and monthly API request totals for Geocoding, Routes, and Static Maps
+    from $script:AppConfig.ApiUsage and updates the corresponding TextBlock controls.
+.OUTPUTS
+    None.
+.EXAMPLE
+    Update-ApiUsageBadgeText
+#>
 function Update-ApiUsageBadgeText {
     [CmdletBinding()]
     param()
@@ -52,7 +66,27 @@ function Update-ApiUsageBadgeText {
     }
 }
 
+#endregion 1. API Usage Metrics & Telemetry Display
+
+#region 2. Map Banner Overlay Designer Configuration
+
+<#
+.SYNOPSIS
+    Applies an overlay configuration object into the Settings Designer UI controls.
+.DESCRIPTION
+    Populates checkboxes, panel dropdowns (Top/Bottom), alignment dropdowns (Left/Right),
+    and order dropdowns in the overlay designer interface from the provided configuration object.
+.PARAMETER cfg
+    The overlay configuration object or hashtable to display.
+.PARAMETER Controls
+    WPF controls hashtable containing the overlay designer controls.
+.OUTPUTS
+    None.
+.EXAMPLE
+    Set-OverlayConfigUi -cfg $script:AppConfig.OverlayConfig -Controls $script:Controls
+#>
 function Set-OverlayConfigUi {
+    [CmdletBinding()]
     param($cfg, [object]$Controls)
     if (-not $cfg) { return }
 
@@ -89,7 +123,21 @@ function Set-OverlayConfigUi {
     }
 }
 
+<#
+.SYNOPSIS
+    Reads the active overlay banner configuration from the Settings tab UI controls.
+.DESCRIPTION
+    Extracts enabled state, panel assignment (Top/Bottom), text alignment (Left/Right),
+    and ordering for all supported route overlay properties from the Designer interface.
+.PARAMETER Controls
+    WPF controls hashtable containing designer controls.
+.OUTPUTS
+    [ordered] Parsed overlay configuration hashtable.
+.EXAMPLE
+    $cfg = Get-CurrentOverlayConfigFromUi -Controls $script:Controls
+#>
 function Get-CurrentOverlayConfigFromUi {
+    [CmdletBinding()]
     param([object]$Controls)
 
     $props = [ordered]@{}
@@ -119,6 +167,19 @@ function Get-CurrentOverlayConfigFromUi {
     }
 }
 
+<#
+.SYNOPSIS
+    Retrieves the active map overlay banner configuration from UI controls or stored settings.
+.DESCRIPTION
+    Checks whether designer UI controls are available to read live settings; if not,
+    falls back to $script:AppConfig.OverlayConfig, or factory defaults via Get-DefaultOverlayConfig.
+.PARAMETER Controls
+    Optional WPF controls hashtable. Defaults to $script:Controls.
+.OUTPUTS
+    [ordered] Active overlay configuration hashtable.
+.EXAMPLE
+    $overlayCfg = Get-CurrentOverlayConfig
+#>
 function Get-CurrentOverlayConfig {
     [CmdletBinding()]
     param([object]$Controls = $null)
@@ -142,6 +203,28 @@ Set-Item -Path "function:global:Get-CurrentOverlayConfig" -Value (Get-Item "func
 Set-Item -Path "function:global:Get-CurrentOverlayConfigFromUi" -Value (Get-Item "function:Get-CurrentOverlayConfigFromUi").ScriptBlock -ErrorAction SilentlyContinue
 Set-Item -Path "function:global:Set-OverlayConfigUi" -Value (Get-Item "function:Set-OverlayConfigUi").ScriptBlock -ErrorAction SilentlyContinue
 
+#endregion 2. Map Banner Overlay Designer Configuration
+
+#region 3. Dynamic Application Theming (Dark/Light Mode & DWM)
+
+<#
+.SYNOPSIS
+    Dynamically switches application styling between Dark and Light mode themes.
+.DESCRIPTION
+    Applies tailored color palettes to WPF dynamic resource brushes, sets window title bar
+    dark mode attributes via Desktop Window Manager (DWM) P/Invoke, updates toggle button state,
+    and invalidates active interactive map tile styles.
+.PARAMETER Theme
+    Theme name ('Dark' or 'Light'). Defaults to 'Dark'.
+.PARAMETER Window
+    Main application Window to update.
+.PARAMETER Controls
+    WPF controls hashtable.
+.OUTPUTS
+    None.
+.EXAMPLE
+    Set-AppTheme -Theme Light
+#>
 function Set-AppTheme {
     [CmdletBinding()]
     param(
@@ -274,6 +357,28 @@ function Set-AppTheme {
     }
 }
 
+#endregion 3. Dynamic Application Theming (Dark/Light Mode & DWM)
+
+#region 4. Internationalization & Dynamic Language Localization
+
+<#
+.SYNOPSIS
+    Applies language translations to all application controls, tabs, headers, and tooltips.
+.DESCRIPTION
+    Switches active language ($script:CurrentLanguage) to 'en', 'de', or 'pl', looks up
+    localized strings from $script:LocCatalog via Get-LocText, and updates all window
+    titles, tab headers, input placeholders, buttons, status messages, and badge texts.
+.PARAMETER LanguageCode
+    Two-letter ISO language code ('en', 'de', 'pl'). Defaults to 'en'.
+.PARAMETER Window
+    Main application Window.
+.PARAMETER Controls
+    WPF controls hashtable.
+.OUTPUTS
+    None.
+.EXAMPLE
+    Apply-AppLanguage -LanguageCode "de"
+#>
 function Apply-AppLanguage {
     [CmdletBinding()]
     param(
@@ -584,6 +689,26 @@ Set-Item -Path "function:global:Set-AppTheme" -Value (Get-Item "function:Set-App
 Set-Item -Path "function:global:Apply-AppLanguage" -Value (Get-Item "function:Apply-AppLanguage").ScriptBlock -ErrorAction SilentlyContinue
 Set-Item -Path "function:global:Update-ApiUsageBadgeText" -Value (Get-Item "function:Update-ApiUsageBadgeText").ScriptBlock -ErrorAction SilentlyContinue
 
+#endregion 4. Internationalization & Dynamic Language Localization
+
+#region 5. Settings Tab UI Event Registration & Configuration Persistence
+
+<#
+.SYNOPSIS
+    Registers and binds all event handlers for the Settings tab and global window controls.
+.DESCRIPTION
+    Wires quick settings navigation, theme toggle buttons, language selection dropdowns,
+    asynchronous API key validation tests, overlay designer controls, budget limit tracking,
+    and configuration persistence via Save-AppConfig.
+.PARAMETER Controls
+    Hashtable containing mapped WPF UI controls.
+.PARAMETER Window
+    Main application Window.
+.OUTPUTS
+    None.
+.EXAMPLE
+    Register-UiSettingsTabEvents -Controls $Controls -Window $script:MainWindow
+#>
 function Register-UiSettingsTabEvents {
     [CmdletBinding()]
     param(
@@ -1130,3 +1255,13 @@ function Register-UiSettingsTabEvents {
         }
     })
 }
+
+#endregion 5. Settings Tab UI Event Registration & Configuration Persistence
+
+#region 6. Global Function Exports
+
+# Export function into global scope for GUI orchestrator
+Set-Item -Path "function:global:Register-UiSettingsTabEvents" -Value (Get-Item "function:Register-UiSettingsTabEvents").ScriptBlock -ErrorAction SilentlyContinue
+
+#endregion 6. Global Function Exports
+

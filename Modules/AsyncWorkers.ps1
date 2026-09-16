@@ -7,15 +7,38 @@
     batch dataset processing, and pre-batch geocode validation using isolated MTA runspaces.
 .NOTES
     Encoding: UTF-8 with BOM
+    Compatibility: Windows PowerShell 5.1 and PowerShell 7+
 #>
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 1. THREAD-SAFE BACKGROUND RUNSPACE WORKER FACTORY (INITIALSESSIONSTATE)
-# ══════════════════════════════════════════════════════════════════════════════
+#region 1. Isolated Runspace Worker Factory
 
+<#
+.SYNOPSIS
+    Creates and configures an isolated background PowerShell runspace worker.
+.DESCRIPTION
+    Builds an InitialSessionState pre-populated with core routing, geocoding, and crypto
+    functions from the caller session. Configures a dedicated Multi-Threaded Apartment (MTA)
+    runspace with UseNewThread policy so long-running API operations do not block the
+    Single-Threaded Apartment (STA) WPF user interface.
+.PARAMETER ScriptBlock
+    The PowerShell ScriptBlock to execute inside the background runspace.
+.OUTPUTS
+    [System.Management.Automation.PowerShell] An open, configured PowerShell pipeline instance.
+.EXAMPLE
+    $worker = New-WorkerPowerShell -ScriptBlock $script:ManualCalcAsync
+    $asyncHandle = $worker.BeginInvoke()
+#>
 function New-WorkerPowerShell {
-    param([scriptblock]$ScriptBlock)
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$ScriptBlock
+    )
+
+    # Construct default InitialSessionState with core .NET and PowerShell built-ins
     $iss = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
+    
+    # Export required business logic functions from host session into the isolated runspace state
     Get-ChildItem function: | Where-Object {
         $_.Name -in @(
             'Protect-SecretString', 'Unprotect-SecretString', 'Test-GoogleApiKey', 'Test-MapyApiKey',
@@ -28,11 +51,15 @@ function New-WorkerPowerShell {
         )
     } | ForEach-Object {
         try {
+            # Register function definition in runspace session state
             $iss.Commands.Add([System.Management.Automation.Runspaces.SessionStateFunctionEntry]::new($_.Name, $_.Definition))
         }
-        catch { }
+        catch {
+            # Ignore duplicate entries or unexportable built-ins
+        }
     }
 
+    # Allocate MTA runspace to allow concurrent background network I/O
     $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace($iss)
     $rs.ApartmentState = [System.Threading.ApartmentState]::MTA
     $rs.ThreadOptions  = [System.Management.Automation.Runspaces.PSThreadOptions]::UseNewThread
@@ -40,15 +67,24 @@ function New-WorkerPowerShell {
 
     $ps = [PowerShell]::Create()
     $ps.Runspace = $rs
-    # IMPORTANT: $null = prevents PowerShell object leakage into pipeline
+    
+    # Discard pipeline return of AddScript to prevent unwanted objects polluting caller results
     $null = $ps.AddScript($ScriptBlock.ToString())
     return $ps
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 2. MANUAL CALCULATION WORKER SCRIPTBLOCK (Isolated Runspace, Top-level)
-# ══════════════════════════════════════════════════════════════════════════════
+#endregion 1. Isolated Runspace Worker Factory
 
+#region 2. Manual Route Calculation Async Worker
+
+<#
+.SYNOPSIS
+    Asynchronous worker scriptblock executing single manual route calculation.
+.DESCRIPTION
+    Runs inside an MTA runspace. Performs geocoding of origin, destination, and intermediate waypoints,
+    invokes the Mapy.com Routing REST API, renders the static route overview PNG map image,
+    and returns a structured result payload with accurate API usage telemetry.
+#>
 $script:ManualCalcAsync = {
     param(
         $start, $end, $waypoints, $routeType, $emission, $trafficAware,
@@ -57,22 +93,28 @@ $script:ManualCalcAsync = {
         $avoidTolls = $false, $avoidHighways = $false, $avoidFerries = $false
     )
 
+    # Enforce modern TLS security protocols inside isolated runspace thread
     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls11 -bor [System.Net.SecurityProtocolType]::Tls
     Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
 
+    # API call counters for cost and usage tracking
     $geoCount = 0
     $routesCount = 0
     $staticCount = 0
 
+    # Thread-safe log append helper targeting persistent log file
     $wlog = {
         param($msg, $lvl = 'INFO')
         if ($logFile) {
             $t = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss.fff')
-            try { [System.IO.File]::AppendAllText($logFile, "[$t] [$lvl] [ManualWorker] $msg`r`n", [System.Text.UTF8Encoding]::new($true)) } catch { }
+            try { 
+                [System.IO.File]::AppendAllText($logFile, "[$t] [$lvl] [ManualWorker] $msg`r`n", [System.Text.UTF8Encoding]::new($true)) 
+            } catch { }
         }
     }
 
     try {
+        # 1. Geocode origin address
         & $wlog "Geocoding origin: '$start'..." "INFO"
         $geoStart = Get-AddressCoordinates -Address $start -ApiKey $apiKey -LanguageCode $languageCode
         $geoCount++
@@ -82,6 +124,7 @@ $script:ManualCalcAsync = {
         }
         & $wlog "Origin OK: $($geoStart.FormattedAddress) ($($geoStart.Latitude), $($geoStart.Longitude))" "INFO"
 
+        # 2. Geocode destination address
         & $wlog "Geocoding destination: '$end'..." "INFO"
         $geoEnd = Get-AddressCoordinates -Address $end -ApiKey $apiKey -LanguageCode $languageCode
         $geoCount++
@@ -91,6 +134,7 @@ $script:ManualCalcAsync = {
         }
         & $wlog "Destination OK: $($geoEnd.FormattedAddress) ($($geoEnd.Latitude), $($geoEnd.Longitude))" "INFO"
 
+        # 3. Geocode intermediate waypoints
         $geoWp = [System.Collections.Generic.List[PSCustomObject]]::new()
         if ($waypoints) {
             foreach ($w in $waypoints) {
@@ -109,6 +153,7 @@ $script:ManualCalcAsync = {
             }
         }
 
+        # 4. Invoke Mapy.com Routing REST API
         & $wlog "Querying Mapy.com Routing API (Type: $routeType, Engine: $emission, AvoidTolls: $avoidTolls, AvoidHighways: $avoidHighways, AvoidFerries: $avoidFerries)..." "INFO"
         $trasa = Get-CarRouteData -OriginLat $geoStart.Latitude -OriginLng $geoStart.Longitude `
             -DestLat $geoEnd.Latitude -DestLng $geoEnd.Longitude `
@@ -123,6 +168,7 @@ $script:ManualCalcAsync = {
         }
         & $wlog "Routes API route found: $($trasa.OdlegloscKm) km, $($trasa.CzasMin) min" "INFO"
 
+        # 5. Attach individual leg metrics to waypoints
         if ($trasa.Legs -and $trasa.Legs.Count -gt 0) {
             for ($w = 0; $w -lt $geoWp.Count; $w++) {
                 if ($w -lt $trasa.Legs.Count) {
@@ -132,6 +178,7 @@ $script:ManualCalcAsync = {
             }
         }
 
+        # 6. Generate interactive web URL
         $gUrl = Get-MapyComUrl -Origin "$($geoStart.Latitude),$($geoStart.Longitude)" `
             -Destination "$($geoEnd.Latitude),$($geoEnd.Longitude)" `
             -Waypoints $geoWp
@@ -146,6 +193,7 @@ $script:ManualCalcAsync = {
         foreach ($pt in $geoWp) { $allPts.Add($pt) }
         $allPts.Add($geoEnd)
 
+        # 7. Render high-resolution static PNG map image
         & $wlog "Rendering static map image: $mapPath..." "INFO"
         $hdrTypePrefix = switch ($languageCode) { 'de' { 'Typ: ' } 'pl' { 'Typ: ' } default { 'Type: ' } }
         $hdrTypeName = switch ($languageCode) {
@@ -174,6 +222,7 @@ $script:ManualCalcAsync = {
         & $wlog "Map rendering complete. Saved: $saved" "INFO"
         $resolvedMapPath = $(if ($saved) { $mapPath } else { $null })
 
+        # Return full calculation package to UI dispatcher
         return [PSCustomObject]@{
             Success         = $true
             DistanceKm      = $trasa.OdlegloscKm
@@ -208,10 +257,18 @@ $script:ManualCalcAsync = {
     }
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 3. BATCH PROCESSING WORKER SCRIPTBLOCK (Isolated Runspace, Top-level)
-# ══════════════════════════════════════════════════════════════════════════════
+#endregion 2. Manual Route Calculation Async Worker
 
+#region 3. Batch Route Processing Async Worker
+
+<#
+.SYNOPSIS
+    Asynchronous worker scriptblock executing batch route calculations.
+.DESCRIPTION
+    Iterates through a list of imported route records, geocoding start/end/waypoints,
+    calling the routing engine, rendering map images, and reporting progress and status
+    back to the main GUI thread via synchronized state and log queue.
+#>
 $script:BatchCalcAsync = {
     param(
         $routes, $apiKey, $outDir, $defaultRouteType, $syncState, $logFile,
@@ -226,6 +283,7 @@ $script:BatchCalcAsync = {
     $routesCount = 0
     $staticCount = 0
 
+    # Thread-safe log dispatching into synchronized queue for UI display + disk file
     $wlog = {
         param($msg, $lvl = 'INFO')
         if ($syncState.LogQueue) {
@@ -233,7 +291,9 @@ $script:BatchCalcAsync = {
         }
         if ($logFile) {
             $t = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss.fff')
-            try { [System.IO.File]::AppendAllText($logFile, "[$t] [$lvl] [BatchWorker] $msg`r`n", [System.Text.UTF8Encoding]::new($true)) } catch { }
+            try { 
+                [System.IO.File]::AppendAllText($logFile, "[$t] [$lvl] [BatchWorker] $msg`r`n", [System.Text.UTF8Encoding]::new($true)) 
+            } catch { }
         }
     }
 
@@ -242,6 +302,7 @@ $script:BatchCalcAsync = {
     $total = $routes.Count
 
     for ($i = 0; $i -lt $total; $i++) {
+        # Check cancellation flag before initiating next network request
         if ($syncState.CancelRequested) {
             & $wlog "Batch processing stopped by user at route $($i + 1)/$total." "WARN"
             break
@@ -249,8 +310,10 @@ $script:BatchCalcAsync = {
         $r = $routes[$i]
         $syncState.CurrentIndex = ($i + 1)
 
-        $rType = if ($defaultRouteType -and $defaultRouteType -ne 'FromSource') { $defaultRouteType }
-        elseif ($r.RouteType) { $r.RouteType }
+        # Resolve route optimization and avoid flags (record override > batch default)
+        # Note: Mapy.com only supports 'Fastest' and 'Shortest' routing profiles (Eco is unsupported)
+        $rType = if ($defaultRouteType -and $defaultRouteType -in 'Fastest', 'Shortest') { $defaultRouteType }
+        elseif ($r.RouteType -and $r.RouteType -in 'Fastest', 'Shortest') { $r.RouteType }
         else { 'Fastest' }
 
         $avoidT = if ($null -ne $r.AvoidTolls) { [bool]$r.AvoidTolls } else { $defaultAvoidTolls }
@@ -262,6 +325,7 @@ $script:BatchCalcAsync = {
         & $wlog "Route $($i + 1)/$($total): Processing '$($r.Start)' -> '$($r.End)' (Type: $rType)..." "INFO"
 
         try {
+            # Geocode Start Address
             $geoStart = Get-AddressCoordinates -Address $r.Start -ApiKey $apiKey -LanguageCode $languageCode
             $geoCount++
             $startStatus = Get-GeocodeStatusDescription -Geo $geoStart
@@ -283,12 +347,13 @@ $script:BatchCalcAsync = {
                 Longitude       = if ($geoStart) { $geoStart.Longitude } else { $null }
             })
 
+            # Geocode End Address
             $geoEnd = Get-AddressCoordinates -Address $r.End -ApiKey $apiKey -LanguageCode $languageCode
             $geoCount++
             $endStatus = Get-GeocodeStatusDescription -Geo $geoEnd
             $isEndFallback = if ($geoEnd -and ($geoEnd.PartialMatch -or $geoEnd.MatchType -in 'APPROXIMATE', 'GEOMETRIC_CENTER')) { $true } else { $false }
 
-            # Waypoints
+            # Geocode Waypoints
             $geoWp = [System.Collections.Generic.List[PSCustomObject]]::new()
             $wpOrder = 2
             if ($r.Waypoints -and @($r.Waypoints).Count -gt 0) {
@@ -333,6 +398,7 @@ $script:BatchCalcAsync = {
                 Longitude       = if ($geoEnd) { $geoEnd.Longitude } else { $null }
             })
 
+            # Check if origin or destination geocoding failed
             if (-not $geoStart -or $geoStart.Status -ne 'OK' -or -not $geoEnd -or $geoEnd.Status -ne 'OK') {
                 & $wlog "Route $($i + 1): Geocoding failed (Start: $($geoStart.Status), End: $($geoEnd.Status)). Skipping route." "WARN"
                 $results.Add([PSCustomObject]@{
@@ -364,7 +430,7 @@ $script:BatchCalcAsync = {
                 continue
             }
 
-            # Compute route
+            # Calculate route geometry and metrics via Mapy.com API
             $routeData = Get-CarRouteData -OriginLat $geoStart.Latitude -OriginLng $geoStart.Longitude `
                 -DestLat $geoEnd.Latitude -DestLng $geoEnd.Longitude `
                 -IntermediatePoints $geoWp -RouteType $rType `
@@ -424,7 +490,7 @@ $script:BatchCalcAsync = {
                 }
             }
 
-            # Render map
+            # Render route overview static map image
             $cleanName = ($routeName -replace '[\\/:*?"<>|]', '_').Trim().Trim('.') -replace '\s+', ' '
             if ([string]::IsNullOrWhiteSpace($cleanName)) { $cleanName = "route_$($i + 1)" }
             $mapFileName = "${ts}_route_$($i + 1)_${cleanName}.png"
@@ -536,10 +602,18 @@ $script:BatchCalcAsync = {
     }
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 4. GEOCODE VALIDATION PREVIEW WORKER SCRIPTBLOCK (Feature 3.J)
-# ══════════════════════════════════════════════════════════════════════════════
+#endregion 3. Batch Route Processing Async Worker
 
+#region 4. Pre-Batch Geocode Validation Async Worker
+
+<#
+.SYNOPSIS
+    Asynchronous worker scriptblock executing pre-batch geocoding validation.
+.DESCRIPTION
+    Iterates through deduplicated addresses before running full routing, verifying
+    whether coordinates can be resolved, identifying approximate/fallback locations,
+    and outputting structured precision diagnostics without incurring route calculation costs.
+#>
 $script:GeocodeValidationAsync = {
     param($addressItems, $apiKey, $languageCode = 'en', $syncState, $logFile)
 
@@ -553,7 +627,9 @@ $script:GeocodeValidationAsync = {
         }
         if ($logFile) {
             $t = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss.fff')
-            try { [System.IO.File]::AppendAllText($logFile, "[$t] [$lvl] [ValidationWorker] $msg`r`n", [System.Text.UTF8Encoding]::new($true)) } catch { }
+            try { 
+                [System.IO.File]::AppendAllText($logFile, "[$t] [$lvl] [ValidationWorker] $msg`r`n", [System.Text.UTF8Encoding]::new($true)) 
+            } catch { }
         }
     }
 
@@ -562,6 +638,7 @@ $script:GeocodeValidationAsync = {
     & $wlog "Starting pre-batch geocode validation ($total unique addresses)..." "INFO"
 
     for ($i = 0; $i -lt $total; $i++) {
+        # Honor user cancellation request
         if ($syncState.CancelRequested) {
             & $wlog "Geocode validation cancelled by user at address $($i + 1)/$total." "WARN"
             break
@@ -572,6 +649,7 @@ $script:GeocodeValidationAsync = {
 
         & $wlog "Validating [$($i + 1)/$total]: '$rawAddr'..." "INFO"
 
+        # Query Geocoding API
         $geo = Get-AddressCoordinates -Address $rawAddr -ApiKey $apiKey -LanguageCode $languageCode
         $geoCount++
 
@@ -581,6 +659,7 @@ $script:GeocodeValidationAsync = {
         $lng = if ($geo.Longitude) { [double]$geo.Longitude } else { $null }
         $formatted = if ($geo.FormattedAddress) { [string]$geo.FormattedAddress } else { '' }
 
+        # Classify geocode accuracy precision
         $precision = switch ($matchType) {
             'ROOFTOP'            { 'ROOFTOP (Exact)' }
             'RANGE_INTERPOLATED' { 'RANGE (Interpolated)' }
@@ -613,3 +692,12 @@ $script:GeocodeValidationAsync = {
         }
     }
 }
+
+#endregion 4. Pre-Batch Geocode Validation Async Worker
+
+#region 5. Global Function & ScriptBlock Exports
+
+# Export helper function into global scope
+Set-Item -Path "function:global:New-WorkerPowerShell" -Value (Get-Item "function:New-WorkerPowerShell").ScriptBlock -ErrorAction SilentlyContinue
+
+#endregion 5. Global Function & ScriptBlock Exports

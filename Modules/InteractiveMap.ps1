@@ -8,6 +8,7 @@
     and adaptive Dark/Light tile themes with seamless fallback to static PNG images.
 .NOTES
     Encoding: UTF-8 with BOM
+    Compatibility: Windows PowerShell 5.1 and PowerShell 7+
 #>
 
 $script:HasWebView2 = $false
@@ -15,12 +16,34 @@ $script:WebView2Control = $null
 $script:CoreWebView2Env = $null
 $script:FallbackWebBrowser = $null
 
+#region 1. WebView2 Environment & Runtime Lifecycle
+
+<#
+.SYNOPSIS
+    Initializes the WebView2 Chromium runtime environment and WPF host control.
+.DESCRIPTION
+    Scans known directory locations and bundled application folders for Microsoft.Web.WebView2.Wpf.dll
+    and Microsoft.Web.WebView2.Core.dll. When located, configures a dedicated user data folder
+    under %LOCALAPPDATA% to prevent E_ACCESSDENIED errors, initializes CoreWebView2Environment,
+    and binds bidirectional WebMessageReceived event handlers to pass coordinate clicks from Leaflet.js
+    back into the WPF UI dispatcher thread.
+.OUTPUTS
+    [bool] $true if WebView2 was successfully located, initialized, and bound; otherwise $false.
+.EXAMPLE
+    if (Initialize-WebView2Environment) {
+        Write-Verbose "WebView2 Chromium runtime ready."
+    }
+#>
 function Initialize-WebView2Environment {
     [CmdletBinding()]
     param()
 
-    if ($script:HasWebView2 -and $script:WebView2Control -and $script:CoreWebView2Env) { return $true }
+    # Return cached true status if already successfully initialized
+    if ($script:HasWebView2 -and $script:WebView2Control -and $script:CoreWebView2Env) { 
+        return $true 
+    }
 
+    # Determine base directory across script execution and PS2EXE compiled standalone states
     $baseDir = if (-not [string]::IsNullOrWhiteSpace($script:AppDir)) {
         $script:AppDir
     } elseif (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
@@ -31,7 +54,7 @@ function Initialize-WebView2Environment {
 
     $parentDir = if (-not [string]::IsNullOrWhiteSpace($baseDir)) { Split-Path -Parent $baseDir } else { $null }
 
-    # Candidates for Microsoft.Web.WebView2 assemblies
+    # Candidates for Microsoft.Web.WebView2 assemblies (local lib folders + common system installs)
     $candidates = [System.Collections.Generic.List[string]]::new()
     if (-not [string]::IsNullOrWhiteSpace($baseDir)) {
         $candidates.Add((Join-Path $baseDir 'lib\Microsoft.Web.WebView2.Wpf.dll'))
@@ -40,7 +63,7 @@ function Initialize-WebView2Environment {
         $candidates.Add((Join-Path $parentDir 'lib\Microsoft.Web.WebView2.Wpf.dll'))
     }
     $systemPaths = @(
-        # Standard system-installed products embedding WebView2
+        # Common software packages shipping with valid WebView2 WPF runtimes
         "C:\Program Files\Fortinet\FortiClient\Microsoft.Web.WebView2.Wpf.dll",
         "C:\Program Files\PowerToys\Microsoft.Web.WebView2.Wpf.dll",
         "C:\Program Files\Surfshark\Microsoft.Web.WebView2.Wpf.dll",
@@ -58,29 +81,35 @@ function Initialize-WebView2Environment {
             $core = Join-Path $dir 'Microsoft.Web.WebView2.Core.dll'
             if (Test-Path $core) {
                 try {
+                    # Load both Core and WPF assemblies into current AppDomain
                     Add-Type -Path $core -ErrorAction Stop
                     Add-Type -Path $cand -ErrorAction Stop
+                    
                     # Verify instantiability with current CLR / runtime
                     $testControl = [Microsoft.Web.WebView2.Wpf.WebView2]::new()
                     $loaded = $true
-                    Write-AppLog "Loaded WebView2 WPF assemblies from: $dir" "OK"
+                    if (Get-Command Write-AppLog -ErrorAction SilentlyContinue) {
+                        Write-AppLog "Loaded WebView2 WPF assemblies from: $dir" "OK"
+                    }
                     break
                 }
                 catch {
-                    # Continue checking other candidates if incompatible with current runtime
+                    # Continue checking next candidate if architecture/CLR mismatch occurs
                 }
             }
         }
     }
 
     if (-not $loaded) {
-        Write-AppLog "WebView2 WPF assembly not found or incompatible. Static PNG mode / fallback will be active." "INFO"
+        if (Get-Command Write-AppLog -ErrorAction SilentlyContinue) {
+            Write-AppLog "WebView2 WPF assembly not found or incompatible. Static PNG mode / fallback will be active." "INFO"
+        }
         $script:HasWebView2 = $false
         return $false
     }
 
     # Crucial: Configure writable UserDataFolder in LocalAppData to avoid E_ACCESSDENIED (0x80070005)
-    # when running from powershell.exe in C:\Windows\System32
+    # which occurs when default working directory is C:\Windows\System32 or Program Files
     $userDataFolder = Join-Path $env:LOCALAPPDATA "MapyComRoutes\WebView2Data"
     if (-not (Test-Path $userDataFolder)) {
         try { [System.IO.Directory]::CreateDirectory($userDataFolder) | Out-Null } catch { }
@@ -91,12 +120,16 @@ function Initialize-WebView2Environment {
         $script:CoreWebView2Env = $envTask.GetAwaiter().GetResult()
     }
     catch {
-        Write-AppLog "CoreWebView2Environment creation failed: $($_.Exception.Message)" "WARN"
+        if (Get-Command Write-AppLog -ErrorAction SilentlyContinue) {
+            Write-AppLog "CoreWebView2Environment creation failed: $($_.Exception.Message)" "WARN"
+        }
         $script:CoreWebView2Env = $null
     }
 
     try {
         $wv = [Microsoft.Web.WebView2.Wpf.WebView2]::new()
+        
+        # Ensure asynchronous CoreWebView2 initialization completes when control loads in visual tree
         $wv.Add_Loaded({
             if ($script:CoreWebView2Env -and (-not $script:WebView2Initialized)) {
                 try {
@@ -105,6 +138,8 @@ function Initialize-WebView2Environment {
                 } catch { }
             }
         })
+
+        # Register message listener to receive interactive clicks, popups, and pin actions from Leaflet.js
         $wv.Add_CoreWebView2InitializationCompleted({
             param($s, $e)
             if ($e.IsSuccess -and $wv.CoreWebView2) {
@@ -114,7 +149,15 @@ function Initialize-WebView2Environment {
                         $raw = $args.WebMessageAsJson
                         $data = $raw | ConvertFrom-Json
                         if ($data -and $data.action) {
-                            $w = if ($script:Controls -and $script:Controls.Window) { $script:Controls.Window } elseif ($script:MainWindow) { $script:MainWindow } else { [System.Windows.Application]::Current.MainWindow }
+                            $w = if ($script:Controls -and $script:Controls.Window) { 
+                                $script:Controls.Window 
+                            } elseif ($script:MainWindow) { 
+                                $script:MainWindow 
+                            } else { 
+                                [System.Windows.Application]::Current.MainWindow 
+                            }
+
+                            # Dispatch UI updates to STA thread safely
                             if ($w -and $w.Dispatcher) {
                                 $w.Dispatcher.BeginInvoke([Action]{
                                     $script:SuppressAutosuggest = $true
@@ -126,7 +169,9 @@ function Initialize-WebView2Environment {
                                                 $script:Controls.badgeStartGeocode.Foreground = [System.Windows.Media.Brushes]::LimeGreen
                                                 $script:Controls.badgeStartGeocode.ToolTip = "Coordinates: $($data.coords)"
                                             }
-                                            Show-AppToastNotification -Title "Map Location Selected" -Message "Start set to $($data.coords)" -Type Info
+                                            if (Get-Command Show-AppToastNotification -ErrorAction SilentlyContinue) {
+                                                Show-AppToastNotification -Title "Map Location Selected" -Message "Start set to $($data.coords)" -Type Info
+                                            }
                                         }
                                         elseif ($data.action -eq 'setDest' -and $script:Controls.txtManualEnd) {
                                             $script:Controls.txtManualEnd.Text = $data.coords
@@ -135,15 +180,21 @@ function Initialize-WebView2Environment {
                                                 $script:Controls.badgeEndGeocode.Foreground = [System.Windows.Media.Brushes]::LimeGreen
                                                 $script:Controls.badgeEndGeocode.ToolTip = "Coordinates: $($data.coords)"
                                             }
-                                            Show-AppToastNotification -Title "Map Location Selected" -Message "Destination set to $($data.coords)" -Type Info
+                                            if (Get-Command Show-AppToastNotification -ErrorAction SilentlyContinue) {
+                                                Show-AppToastNotification -Title "Map Location Selected" -Message "Destination set to $($data.coords)" -Type Info
+                                            }
                                         }
                                         elseif ($data.action -eq 'addStop' -and $script:Controls.lstWaypoints) {
                                             $null = $script:Controls.lstWaypoints.Items.Add($data.coords)
-                                            Show-AppToastNotification -Title "Map Location Selected" -Message "Waypoint added: $($data.coords)" -Type Info
+                                            if (Get-Command Show-AppToastNotification -ErrorAction SilentlyContinue) {
+                                                Show-AppToastNotification -Title "Map Location Selected" -Message "Waypoint added: $($data.coords)" -Type Info
+                                            }
                                         }
                                         elseif ($data.action -eq 'copy') {
                                             [System.Windows.Clipboard]::SetText($data.coords)
-                                            Show-AppToastNotification -Title "Coordinates Copied" -Message "Copied to clipboard: $($data.coords)" -Type Info
+                                            if (Get-Command Show-AppToastNotification -ErrorAction SilentlyContinue) {
+                                                Show-AppToastNotification -Title "Coordinates Copied" -Message "Copied to clipboard: $($data.coords)" -Type Info
+                                            }
                                         }
                                     }
                                     finally {
@@ -156,37 +207,67 @@ function Initialize-WebView2Environment {
                 })
             }
         })
+
         $wv.Add_NavigationCompleted({
             param($s, $e)
             if ($e.IsSuccess) {
-                Write-AppLog "Interactive Leaflet map rendered successfully." "INFO"
+                if (Get-Command Write-AppLog -ErrorAction SilentlyContinue) {
+                    Write-AppLog "Interactive Leaflet map rendered successfully." "INFO"
+                }
             } else {
-                Write-AppLog "Interactive map navigation status: $($e.WebErrorStatus)" "WARN"
+                if (Get-Command Write-AppLog -ErrorAction SilentlyContinue) {
+                    Write-AppLog "Interactive map navigation status: $($e.WebErrorStatus)" "WARN"
+                }
             }
         })
+
         $script:WebView2Control = $wv
         $script:HasWebView2 = $true
         return $true
     }
     catch {
-        Write-AppLog "WebView2 instantiation failed: $($_.Exception.Message)" "WARN"
+        if (Get-Command Write-AppLog -ErrorAction SilentlyContinue) {
+            Write-AppLog "WebView2 instantiation failed: $($_.Exception.Message)" "WARN"
+        }
         $script:HasWebView2 = $false
         return $false
     }
 }
 
+#endregion 1. WebView2 Environment & Runtime Lifecycle
+
+#region 2. Polyline Decoding Engine
+
+<#
+.SYNOPSIS
+    Decodes a standard Google/Mapy.com Encoded Polyline string into latitude and longitude coordinates.
+.DESCRIPTION
+    Implements the standard lossy polyline compression decoding algorithm (5-bit chunking with
+    ASCII offset of 63 and zigzag encoding). Produces a strongly typed list of latitude and
+    longitude coordinate pairs accurate to 5-6 decimal places (WGS84).
+.PARAMETER EncodedPolyline
+    The compressed polyline string returned by routing APIs (e.g. Google Maps or Mapy.com).
+.OUTPUTS
+    [System.Collections.Generic.List[PSCustomObject]] Collection of objects with Latitude and Longitude properties.
+.EXAMPLE
+    $points = ConvertFrom-GoogleEncodedPolyline -EncodedPolyline "_p~iF~ps|U_ulLnnqC_mqNvxq`@"
+    $points | ForEach-Object { "$($_.Latitude), $($_.Longitude)" }
+#>
 function ConvertFrom-GoogleEncodedPolyline {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][string]$EncodedPolyline)
 
     $points = [System.Collections.Generic.List[PSCustomObject]]::new()
-    if ([string]::IsNullOrWhiteSpace($EncodedPolyline)) { return $points }
+    if ([string]::IsNullOrWhiteSpace($EncodedPolyline)) { 
+        return $points 
+    }
 
     $len = $EncodedPolyline.Length
     $index = 0
     $lat = 0
     $lng = 0
 
+    # Polyline decoding loop: sequentially unrolls latitude delta then longitude delta
     while ($index -lt $len) {
         $b = 0
         $shift = 0
@@ -209,6 +290,7 @@ function ConvertFrom-GoogleEncodedPolyline {
         $dlng = if (($result -band 1) -ne 0) { -bnot ($result -shr 1) } else { ($result -shr 1) }
         $lng += $dlng
 
+        # Scaling factor: Google Encoded Polyline represents coordinate * 1e5
         $points.Add([PSCustomObject]@{
             Latitude  = [math]::Round($lat * 1e-5, 6)
             Longitude = [math]::Round($lng * 1e-5, 6)
@@ -218,6 +300,54 @@ function ConvertFrom-GoogleEncodedPolyline {
     return $points
 }
 
+#endregion 2. Polyline Decoding Engine
+
+#region 3. Dynamic HTML Leaflet Map Generation
+
+<#
+.SYNOPSIS
+    Generates a standalone, interactive Leaflet.js HTML map file for a calculated route.
+.DESCRIPTION
+    Creates a responsive HTML5 page containing Leaflet.js map integration with multi-layer
+    support (CARTO Voyager/Dark, OpenStreetMap, Esri World Imagery Satellite). Displays
+    the decoded route polyline, origin marker (pin A), destination marker (pin B), intermediate
+    waypoint markers, and an interactive context menu enabling clicks to set start, end, or stops.
+.PARAMETER RouteName
+    Title or identifier for the route. Defaults to 'Route'.
+.PARAMETER EncodedPolyline
+    Encoded polyline string representing the path geometry.
+.PARAMETER OriginLat
+    Latitude of the route start point.
+.PARAMETER OriginLng
+    Longitude of the route start point.
+.PARAMETER OriginAddress
+    Human-readable street address or label for the origin point.
+.PARAMETER DestLat
+    Latitude of the route destination point.
+.PARAMETER DestLng
+    Longitude of the route destination point.
+.PARAMETER DestAddress
+    Human-readable street address or label for the destination point.
+.PARAMETER Waypoints
+    Array of waypoint objects with Latitude, Longitude, and optional Address properties.
+.PARAMETER DistanceKm
+    Calculated route distance in kilometers.
+.PARAMETER DurationMin
+    Calculated route duration in minutes.
+.PARAMETER RouteType
+    Route optimization mode ('Fastest', 'Shortest', 'Eco'). Defaults to 'Fastest'.
+.PARAMETER IsDarkMode
+    Enables dark mode theme styling and CARTO Dark basemap tiles. Defaults to $true.
+.PARAMETER OutputPath
+    Target path for the generated HTML file. If omitted, creates a temporary file in %TEMP%.
+.PARAMETER CartoApiKey
+    Optional CARTO API key for high-volume or authenticated tile rendering.
+.OUTPUTS
+    [string] Full filesystem path to the generated HTML map file.
+.EXAMPLE
+    $htmlPath = New-RouteHtmlMap -RouteName "Fleet 1" -EncodedPolyline $polyline `
+        -OriginLat 52.23 -OriginLng 21.01 -DestLat 50.06 -DestLng 19.94
+#>
 function New-RouteHtmlMap {
     [CmdletBinding()]
     param(
@@ -246,13 +376,14 @@ function New-RouteHtmlMap {
         $OutputPath = Join-Path $env:TEMP "gmaps_interactive_route_${ts}.html"
     }
 
-    # Clean up older temporary route map HTML files (> 30 mins)
+    # Clean up older temporary route map HTML files (> 30 mins old) to avoid disk clutter
     try {
         Get-ChildItem -Path $env:TEMP -Filter 'gmaps_interactive_route_*.html' -ErrorAction SilentlyContinue |
             Where-Object { $_.LastWriteTime -lt (Get-Date).AddMinutes(-30) } |
             Remove-Item -Force -ErrorAction SilentlyContinue
     } catch { }
 
+    # Resolve Carto API key priority: parameter > AppConfig > Environment variable
     $resolvedCartoKey = if (-not [string]::IsNullOrWhiteSpace($CartoApiKey)) {
         $CartoApiKey.Trim()
     } elseif ($script:AppConfig -and -not [string]::IsNullOrWhiteSpace($script:AppConfig.CartoApiKey)) {
@@ -263,9 +394,10 @@ function New-RouteHtmlMap {
         ''
     }
 
+    # Decode path geometry into point coordinates
     $points = if ($EncodedPolyline) { ConvertFrom-GoogleEncodedPolyline -EncodedPolyline $EncodedPolyline } else { @() }
     
-    # Coordinates array for Leaflet: [[lat, lng], [lat, lng], ...]
+    # Format coordinates array for Leaflet: [[lat, lng], [lat, lng], ...]
     $coordJsonList = [System.Collections.Generic.List[string]]::new()
     foreach ($pt in $points) {
         $lat = [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "{0:F6}", [double]$pt.Latitude)
@@ -274,7 +406,7 @@ function New-RouteHtmlMap {
     }
     $coordJson = "[$($coordJsonList -join ',')]"
 
-    # Tile layer URL and attribution based on theme
+    # Tile layer URL and attribution based on dark/light theme
     $tileUrl = if ($IsDarkMode) {
         'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
     } else {
@@ -292,7 +424,7 @@ function New-RouteHtmlMap {
     $safeOrigin = [System.Net.WebUtility]::HtmlEncode($OriginAddress)
     $safeDest = [System.Net.WebUtility]::HtmlEncode($DestAddress)
 
-    # Waypoints JSON
+    # Format intermediate waypoints for Leaflet injection
     $wpJsonList = [System.Collections.Generic.List[string]]::new()
     if ($Waypoints -and @($Waypoints).Count -gt 0) {
         $idx = 1
@@ -394,6 +526,7 @@ function New-RouteHtmlMap {
 
     const map = L.map('map', { zoomControl: true });
 
+    // Base Tile Layers: CARTO Standard, OpenStreetMap, Esri Satellite
     const baseStandard = L.tileLayer('$tileUrl', {
       maxZoom: 19,
       attribution: '&copy; CARTO &copy; OpenStreetMap'
@@ -418,6 +551,7 @@ function New-RouteHtmlMap {
     baseStandard.addTo(map);
     L.control.layers(baseMaps, null, { position: 'topleft' }).addTo(map);
 
+    // Send action from JavaScript runtime through WebView2 IPC channel to host WPF application
     function sendMapAction(action, lat, lng) {
       const coordStr = lat + ', ' + lng;
       try {
@@ -430,7 +564,7 @@ function New-RouteHtmlMap {
       } catch (err) {}
     }
 
-    // Context menu / right-click (Milestone 2)
+    // Context menu / right-click handler for direct map coordinate capture
     map.on('contextmenu', function(e) {
       const lat = e.latlng.lat.toFixed(5);
       const lng = e.latlng.lng.toFixed(5);
@@ -445,7 +579,7 @@ function New-RouteHtmlMap {
       L.popup().setLatLng(e.latlng).setContent(html).openOn(map);
     });
 
-    // Context / click coordinates popup (Milestone 2)
+    // Left-click shortcut popup
     map.on('click', function(e) {
       const lat = e.latlng.lat.toFixed(5);
       const lng = e.latlng.lng.toFixed(5);
@@ -470,6 +604,7 @@ function New-RouteHtmlMap {
       });
     }
 
+    // Refit viewport on window resize or initial render
     window.addEventListener('resize', () => {
       map.invalidateSize();
     });
@@ -495,21 +630,21 @@ function New-RouteHtmlMap {
       map.setView([$origLatStr || 52.0, $origLngStr || 19.5], 10);
     }
 
-    // Origin Marker
+    // Origin Marker (Pin A)
     if ($origLatStr && $origLngStr) {
       L.marker([$origLatStr, $origLngStr], { icon: createIcon('A', 'pin-start') })
         .addTo(map)
         .bindPopup('<strong>Origin (Start)</strong><br>$safeOrigin');
     }
 
-    // Waypoints Markers
+    // Intermediate Waypoint Markers (Numbered Pins)
     waypoints.forEach(wp => {
       L.marker([wp.lat, wp.lng], { icon: createIcon(wp.label, 'pin-wp') })
         .addTo(map)
         .bindPopup('<strong>Waypoint ' + wp.label + '</strong><br>' + wp.address);
     });
 
-    // Destination Marker
+    // Destination Marker (Pin B)
     if ($destLatStr && $destLngStr) {
       L.marker([$destLatStr, $destLngStr], { icon: createIcon('B', 'pin-dest') })
         .addTo(map)
@@ -520,10 +655,31 @@ function New-RouteHtmlMap {
 </html>
 "@
 
+    # Save HTML template using UTF-8 with BOM for cross-platform and accent compatibility
     [System.IO.File]::WriteAllText($OutputPath, $html, [System.Text.UTF8Encoding]::new($true))
     return $OutputPath
 }
 
+#endregion 3. Dynamic HTML Leaflet Map Generation
+
+#region 4. Browser Navigation & WPF Host Integration
+
+<#
+.SYNOPSIS
+    Navigates the host WPF container to a rendered route map HTML document.
+.DESCRIPTION
+    Directs the active WebView2 control to the target HTML file URI. If WebView2 is
+    unavailable, automatically mounts and navigates a standard WPF WebBrowser fallback
+    control inside the provided HostPanel container.
+.PARAMETER HtmlPath
+    Filesystem path to the HTML map document to navigate.
+.PARAMETER HostPanel
+    WPF container element (e.g. Border or ContentControl) hosting the browser control.
+.OUTPUTS
+    [bool] $true if navigation was successfully executed; otherwise $false.
+.EXAMPLE
+    Navigate-RouteInteractiveMap -HtmlPath "C:\Temp\map.html" -HostPanel $Controls.pnlInteractiveMapHost
+#>
 function Navigate-RouteInteractiveMap {
     [CmdletBinding()]
     param(
@@ -556,12 +712,14 @@ function Navigate-RouteInteractiveMap {
                 return $true
             }
             catch {
-                Write-AppLog "WebView2 navigation error: $($_.Exception.Message)" "WARN"
+                if (Get-Command Write-AppLog -ErrorAction SilentlyContinue) {
+                    Write-AppLog "WebView2 navigation error: $($_.Exception.Message)" "WARN"
+                }
             }
         }
     }
 
-    # Fallback to WPF WebBrowser if WebView2 is unavailable or failed
+    # Fallback to WPF WebBrowser (Internet Explorer engine) if WebView2 is unavailable
     if ($HostPanel) {
         if (-not $script:FallbackWebBrowser) {
             $script:FallbackWebBrowser = [System.Windows.Controls.WebBrowser]::new()
@@ -574,13 +732,29 @@ function Navigate-RouteInteractiveMap {
             return $true
         }
         catch {
-            Write-AppLog "WebBrowser fallback navigation failed: $($_.Exception.Message)" "WARN"
+            if (Get-Command Write-AppLog -ErrorAction SilentlyContinue) {
+                Write-AppLog "WebBrowser fallback navigation failed: $($_.Exception.Message)" "WARN"
+            }
         }
     }
 
     return $false
 }
 
+<#
+.SYNOPSIS
+    Refreshes the interactive route map based on the most recent calculation result.
+.DESCRIPTION
+    Extracts polyline coordinates, waypoints, addresses, and current application theme
+    settings from the calculation result object or $script:LastManualResult, builds a new
+    Leaflet HTML map file, and navigates the interactive map host panel to display it.
+.PARAMETER CalcResult
+    Optional route calculation result object. If omitted, uses $script:LastManualResult.
+.OUTPUTS
+    None.
+.EXAMPLE
+    Update-InteractiveRouteMap -CalcResult $routeResult
+#>
 function Update-InteractiveRouteMap {
     [CmdletBinding()]
     param(
@@ -588,7 +762,9 @@ function Update-InteractiveRouteMap {
     )
 
     $calc = if ($CalcResult) { $CalcResult } else { $script:LastManualResult }
-    if (-not $calc -or -not $calc.EncodedPolyline) { return }
+    if (-not $calc -or -not $calc.EncodedPolyline) { 
+        return 
+    }
 
     $isDark = ($script:CurrentTheme -ne 'Light')
     $resolvedRouteName = if (-not [string]::IsNullOrWhiteSpace($script:ActiveManualRouteName)) {
@@ -598,7 +774,9 @@ function Update-InteractiveRouteMap {
     } else {
         'Route'
     }
-    if ([string]::IsNullOrWhiteSpace($resolvedRouteName)) { $resolvedRouteName = 'Route' }
+    if ([string]::IsNullOrWhiteSpace($resolvedRouteName)) { 
+        $resolvedRouteName = 'Route' 
+    }
 
     $cartoKey = if (Get-Command Get-CurrentCartoApiKey -ErrorAction SilentlyContinue) {
         Get-CurrentCartoApiKey
@@ -621,7 +799,15 @@ function Update-InteractiveRouteMap {
     Navigate-RouteInteractiveMap -HtmlPath $htmlMap -HostPanel $mapHostPanel | Out-Null
 }
 
+#endregion 4. Browser Navigation & WPF Host Integration
+
+#region 5. Global Function Exports
+
+# Export functions into global scope so caller scripts and GUI orchestrators can invoke them
 Set-Item -Path "function:global:Initialize-WebView2Environment" -Value (Get-Item "function:Initialize-WebView2Environment").ScriptBlock -ErrorAction SilentlyContinue
+Set-Item -Path "function:global:ConvertFrom-GoogleEncodedPolyline" -Value (Get-Item "function:ConvertFrom-GoogleEncodedPolyline").ScriptBlock -ErrorAction SilentlyContinue
 Set-Item -Path "function:global:New-RouteHtmlMap" -Value (Get-Item "function:New-RouteHtmlMap").ScriptBlock -ErrorAction SilentlyContinue
 Set-Item -Path "function:global:Navigate-RouteInteractiveMap" -Value (Get-Item "function:Navigate-RouteInteractiveMap").ScriptBlock -ErrorAction SilentlyContinue
 Set-Item -Path "function:global:Update-InteractiveRouteMap" -Value (Get-Item "function:Update-InteractiveRouteMap").ScriptBlock -ErrorAction SilentlyContinue
+
+#endregion 5. Global Function Exports

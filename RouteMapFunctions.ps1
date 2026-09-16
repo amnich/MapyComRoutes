@@ -28,12 +28,25 @@
     Encoding: UTF-8 with BOM
 #>
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 1. DIALOGS AND SECURITY (DPAPI)
-# ══════════════════════════════════════════════════════════════════════════════
+#region 1. File Selection Dialogs & Security (DPAPI)
 
+<#
+.SYNOPSIS
+    Displays an interactive file picker dialog to select an Excel spreadsheet.
+.DESCRIPTION
+    Uses System.Windows.Forms.OpenFileDialog to prompt the user to choose an .xlsx or .xls
+    file containing addresses for routing calculations.
+.PARAMETER InitialDirectory
+    Optional starting directory for the file open dialog. Defaults to Documents folder.
+.OUTPUTS
+    [string] Full filesystem path of the selected Excel file, or $null if cancelled.
+.EXAMPLE
+    $excelPath = Select-InputExcel -InitialDirectory "C:\Data"
+#>
 function Select-InputExcel {
-    param([string]$InitialDirectory)
+    [CmdletBinding()]
+    param([Parameter()][string]$InitialDirectory)
+
     Add-Type -AssemblyName System.Windows.Forms
     $Dialog = [System.Windows.Forms.OpenFileDialog]::new()
     $Dialog.Title = 'Select Excel file with addresses'
@@ -49,8 +62,23 @@ function Select-InputExcel {
     return $null
 }
 
+<#
+.SYNOPSIS
+    Displays an interactive file picker dialog for multi-format route data files.
+.DESCRIPTION
+    Prompts the user to select an input dataset file supporting Excel (.xlsx/.xls),
+    CSV/TSV (.csv/.tsv), or JSON (.json) route structures.
+.PARAMETER InitialDirectory
+    Optional starting folder for the file picker. Defaults to Documents folder.
+.OUTPUTS
+    [string] Full filesystem path of the selected file, or $null if cancelled.
+.EXAMPLE
+    $dataFile = Select-InputDataFile
+#>
 function Select-InputDataFile {
-    param([string]$InitialDirectory)
+    [CmdletBinding()]
+    param([Parameter()][string]$InitialDirectory)
+
     Add-Type -AssemblyName System.Windows.Forms
     $Dialog = [System.Windows.Forms.OpenFileDialog]::new()
     $Dialog.Title = 'Select route data file (JSON, CSV, Excel)'
@@ -66,10 +94,25 @@ function Select-InputDataFile {
     return $null
 }
 
+<#
+.SYNOPSIS
+    Encrypts a plaintext credential string using Windows DPAPI (CurrentUser scope).
+.DESCRIPTION
+    Protects sensitive credentials (such as API keys) using machine/user cryptographic keys
+    via ProtectedData. Protects against plain-text token exposure on the local filesystem.
+.PARAMETER PlainText
+    The sensitive plaintext string to encrypt.
+.OUTPUTS
+    [string] Base64-encoded encrypted byte sequence, or standard SecureString representation.
+.EXAMPLE
+    $encrypted = Protect-SecretString -PlainText "my_api_key"
+#>
 function Protect-SecretString {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$PlainText)
+
     if ([string]::IsNullOrEmpty($PlainText)) { return $null }
+
     try {
         Add-Type -AssemblyName System.Security
         $bytes = [System.Text.Encoding]::UTF8.GetBytes($PlainText)
@@ -78,15 +121,31 @@ function Protect-SecretString {
         return [Convert]::ToBase64String($protected)
     }
     catch {
+        # Fallback to standard SecureString if ProtectedData is not available
         $sec = ConvertTo-SecureString -String $PlainText -AsPlainText -Force
         return (ConvertFrom-SecureString -SecureString $sec)
     }
 }
 
+<#
+.SYNOPSIS
+    Decrypts a DPAPI-encrypted or SecureString-encoded ciphertext back to plaintext.
+.DESCRIPTION
+    Reverses Protect-SecretString using Windows DPAPI (CurrentUser scope) or SecureString
+    memory unmarshalling with proper BSTR zero-free cleanup.
+.PARAMETER EncryptedText
+    The base64-encoded ciphertext or SecureString string representation.
+.OUTPUTS
+    [string] Plaintext decrypted secret string, or $null on failure.
+.EXAMPLE
+    $plain = Unprotect-SecretString -EncryptedText $encrypted
+#>
 function Unprotect-SecretString {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$EncryptedText)
+
     if ([string]::IsNullOrWhiteSpace($EncryptedText)) { return $null }
+
     try {
         Add-Type -AssemblyName System.Security
         $bytes = [Convert]::FromBase64String($EncryptedText)
@@ -95,6 +154,7 @@ function Unprotect-SecretString {
         return [System.Text.Encoding]::UTF8.GetString($unprotected)
     }
     catch {
+        # Fallback to SecureString marshalling
         try {
             $sec = ConvertTo-SecureString -String $EncryptedText
             $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
@@ -108,12 +168,33 @@ function Unprotect-SecretString {
     }
 }
 
+#endregion 1. File Selection Dialogs & Security (DPAPI)
+
+#region 2. Mapy.com REST API Core & Key Testing
+
+<#
+.SYNOPSIS
+    Executes an HTTP GET request against the Mapy.com REST API and returns parsed JSON.
+.DESCRIPTION
+    Uses HttpWebRequest configured with UTF-8 character set, timeout limits, and
+    deterministic response stream disposal to prevent socket exhaustion.
+.PARAMETER Uri
+    Full endpoint URL including query parameters.
+.PARAMETER TimeoutSec
+    Connection and read/write timeout in seconds. Defaults to 30.
+.OUTPUTS
+    [PSCustomObject] Deserialized JSON object returned by the Mapy.com API.
+.EXAMPLE
+    $json = Invoke-MapyRestJson -Uri "https://api.mapy.cz/v1/geocode?query=Warszawa&apikey=$key"
+#>
 function Invoke-MapyRestJson {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Uri,
         [Parameter()][int]$TimeoutSec = 30
     )
+
+    # Configure WebRequest with bounded timeouts to prevent hanging on network drops
     $req = [System.Net.HttpWebRequest]::Create($Uri)
     $req.Timeout = [math]::Max(1000, $TimeoutSec * 1000)
     $req.ReadWriteTimeout = [math]::Max(1000, $TimeoutSec * 1000)
@@ -136,6 +217,23 @@ function Invoke-MapyRestJson {
 }
 Set-Item -Path "function:global:Invoke-MapyRestJson" -Value (Get-Item "function:Invoke-MapyRestJson").ScriptBlock -ErrorAction SilentlyContinue
 
+<#
+.SYNOPSIS
+    Verifies the validity and operational status of a Mapy.com API key.
+.DESCRIPTION
+    Executes a minimal, lightweight geocode query ('Praha') to test authentication.
+    Returns a structured result with validation state and diagnostic message,
+    detecting HTTP 401/403 authorization failures vs general network connection errors.
+.PARAMETER ApiKey
+    The Mapy.com API key string to test.
+.PARAMETER LanguageCode
+    Language code for response messages. Defaults to 'en'.
+.OUTPUTS
+    [PSCustomObject] Object with Valid [bool] and Message [string] properties.
+.EXAMPLE
+    $test = Test-MapyApiKey -ApiKey "my_api_key"
+    if (-not $test.Valid) { Write-Warning $test.Message }
+#>
 function Test-MapyApiKey {
     [CmdletBinding()]
     [Alias('Test-GoogleApiKey')]
@@ -143,9 +241,11 @@ function Test-MapyApiKey {
         [Parameter(Mandatory)][string]$ApiKey,
         [Parameter()][string]$LanguageCode = 'en'
     )
+
     if ([string]::IsNullOrWhiteSpace($ApiKey)) {
         return [PSCustomObject]@{ Valid = $false; Message = 'Klucz API jest pusty.' }
     }
+
     try {
         $lang = if ($LanguageCode) { ($LanguageCode -split '[-_]')[0].ToLower() } else { 'en' }
         $Url = "https://api.mapy.cz/v1/geocode?query=Praha&lang=$lang&limit=1&apikey=$ApiKey"
@@ -168,10 +268,26 @@ function Test-MapyApiKey {
     }
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 2. ADDRESS GEOCODING (MAPY.COM GEOCODING API)
-# ══════════════════════════════════════════════════════════════════════════════
+#endregion 2. Mapy.com REST API Core & Key Testing
 
+#region 3. Geocoding & Address Resolution Engine
+
+<#
+.SYNOPSIS
+    Extracts an address component value matching specified type names from regionalStructure.
+.DESCRIPTION
+    Searches an array of Mapy.com regionalStructure address component objects for the first
+    item matching any of the requested types (e.g. 'regional.street', 'regional.address',
+    'regional.municipality'). Returns the first populated name, long_name, or short_name property.
+.PARAMETER Components
+    Array of regional structure objects returned in geocoding items.
+.PARAMETER Types
+    Array of string type identifiers to match against the component 'type' property.
+.OUTPUTS
+    [string] The matched address component text value, or $null if none found.
+.EXAMPLE
+    $street = Get-AddressComponentValue -Components $geoItem.regionalStructure -Types @('regional.street')
+#>
 function Get-AddressComponentValue {
     [CmdletBinding()]
     param(
@@ -186,6 +302,7 @@ function Get-AddressComponentValue {
 
     if (-not $Matches) { return $null }
 
+    # Inspect property names in precedence order: name -> long_name -> short_name
     foreach ($FieldName in @('name', 'long_name', 'short_name')) {
         if ($Matches.PSObject.Properties.Name -contains $FieldName) {
             $Value = [string]$Matches.$FieldName
@@ -198,6 +315,29 @@ function Get-AddressComponentValue {
     return $null
 }
 
+<#
+.SYNOPSIS
+    Geocodes an address string or parses coordinate pairs into WGS84 coordinates.
+.DESCRIPTION
+    Checks if the address input is already formatted as coordinate numbers ("lat, lng").
+    If not, queries the Mapy.com Geocoding API (type=regional), parses structured address
+    attributes (street, building number, city, postal code), and maps Mapy.com entity types
+    to standardized precision classifications (ROOFTOP, RANGE_INTERPOLATED, GEOMETRIC_CENTER, APPROXIMATE).
+.PARAMETER Address
+    The input address string or coordinate pair to geocode.
+.PARAMETER ApiKey
+    Mapy.com API key for authentication.
+.PARAMETER LanguageCode
+    Language code for geocoded address formatting ('en', 'de', 'pl', 'cs'). Defaults to 'en'.
+.PARAMETER RequireStreetNumber
+    Switch indicating if an exact street house number is expected.
+.OUTPUTS
+    [PSCustomObject] Normalized geocoding result with Latitude, Longitude, FormattedAddress,
+    UlicaINumer, KodPocztowy, Miasto, MatchType, Status, and ErrorMessage.
+.EXAMPLE
+    $geo = Get-AddressCoordinates -Address "Marszalkowska 1, Warszawa" -ApiKey $myKey
+    if ($geo.Status -eq 'OK') { Write-Host "Coords: $($geo.Latitude), $($geo.Longitude)" }
+#>
 function Get-AddressCoordinates {
     [CmdletBinding()]
     param(
@@ -206,9 +346,10 @@ function Get-AddressCoordinates {
         [Parameter()][string]$LanguageCode = 'en',
         [Parameter()][switch]$RequireStreetNumber
     )
+
     if ([string]::IsNullOrWhiteSpace($Address)) { return $null }
 
-    # If coordinates are provided directly in format "52.2297, 21.0122"
+    # Short-circuit check: detect if input is already raw coordinate pair (e.g. "52.2297, 21.0122")
     if ($Address.Trim() -match '^\s*([+-]?\d+(?:\.\d+)?)\s*[,;\s]\s*([+-]?\d+(?:\.\d+)?)\s*$') {
         $lat = [double]$Matches[1]
         $lng = [double]$Matches[2]
@@ -237,7 +378,7 @@ function Get-AddressCoordinates {
             $ResultItem = $Results[0]
             $Position   = $ResultItem.position
 
-            # Extract address components from regionalStructure
+            # Extract granular address components from regionalStructure
             $RegStructure = @($ResultItem.regionalStructure)
             $StreetName   = Get-AddressComponentValue -Components $RegStructure -Types @('regional.street')
             $AddressNum   = Get-AddressComponentValue -Components $RegStructure -Types @('regional.address')
@@ -252,7 +393,7 @@ function Get-AddressCoordinates {
                                 elseif ($AddressNum) { $AddressNum }
                                 else { $null }
 
-            # Build formatted address from name + location
+            # Compose formatted address from name + location
             $FormattedAddress = if ($ResultItem.name -and $ResultItem.location) {
                 "$($ResultItem.name), $($ResultItem.location)"
             } elseif ($ResultItem.name) {
@@ -263,11 +404,11 @@ function Get-AddressCoordinates {
                 $Address
             }
 
-            # Map Mapy.com entity type to Google-compatible match type
+            # Map Mapy.com entity types to standardized accuracy classifications
             $EntityType = [string]$ResultItem.type
             $LocationType = switch -Wildcard ($EntityType) {
-                'regional.address'          { 'ROOFTOP' }
-                'regional.street'           { 'RANGE_INTERPOLATED' }
+                'regional.address'           { 'ROOFTOP' }
+                'regional.street'            { 'RANGE_INTERPOLATED' }
                 'regional.municipality_part' { 'GEOMETRIC_CENTER' }
                 'regional.municipality'      { 'APPROXIMATE' }
                 'regional.region'            { 'APPROXIMATE' }
@@ -313,6 +454,26 @@ function Get-AddressCoordinates {
 }
 Set-Item -Path "function:global:Get-AddressCoordinates" -Value (Get-Item "function:Get-AddressCoordinates").ScriptBlock -ErrorAction SilentlyContinue
 
+<#
+.SYNOPSIS
+    Queries the Mapy.com Suggest API for real-time address autocompletion suggestions.
+.DESCRIPTION
+    Provides fast, non-blocking address suggestions as the user types into address textboxes.
+    Queries the dedicated suggest endpoint first, falling back to a limited geocode search
+    if suggest yields no results.
+.PARAMETER Query
+    Partial address or place query string (minimum 2 characters).
+.PARAMETER ApiKey
+    Mapy.com API key.
+.PARAMETER LanguageCode
+    Language code for localized names. Defaults to 'en'.
+.PARAMETER Limit
+    Maximum number of suggestion items to return. Defaults to 5.
+.OUTPUTS
+    [object[]] Array of suggestion objects containing Name, Label, FullText, Latitude, Longitude.
+.EXAMPLE
+    $suggestions = Get-MapySuggest -Query "Wieliczk" -ApiKey $key
+#>
 function Get-MapySuggest {
     [CmdletBinding()]
     param(
@@ -321,12 +482,13 @@ function Get-MapySuggest {
         [Parameter()][string]$LanguageCode = 'en',
         [Parameter()][int]$Limit = 5
     )
+
     if ([string]::IsNullOrWhiteSpace($Query) -or $Query.Trim().Length -lt 2) { return @() }
 
     $encodedQuery = [System.Uri]::EscapeDataString($Query.Trim())
     $lang = if ($LanguageCode) { ($LanguageCode -split '[-_]')[0].ToLower() } else { 'en' }
 
-    # 1. Try Mapy.com suggest endpoint
+    # 1. Primary: Query Mapy.com suggest endpoint
     $suggestUrl = "https://api.mapy.cz/v1/suggest?query=$encodedQuery&lang=$lang&limit=$Limit&type=regional&apikey=$ApiKey"
     try {
         $resp = Invoke-MapyRestJson -Uri $suggestUrl -TimeoutSec 5
@@ -349,7 +511,7 @@ function Get-MapySuggest {
     }
     catch { }
 
-    # 2. Fallback to geocode endpoint with limit
+    # 2. Secondary fallback: Query geocode endpoint with limit if suggest is unsupported or fails
     $geocodeUrl = "https://api.mapy.cz/v1/geocode?query=$encodedQuery&lang=$lang&limit=$Limit&type=regional&apikey=$ApiKey"
     try {
         $resp = Invoke-MapyRestJson -Uri $geocodeUrl -TimeoutSec 5
@@ -377,11 +539,26 @@ function Get-MapySuggest {
 }
 Set-Item -Path "function:global:Get-MapySuggest" -Value (Get-Item "function:Get-MapySuggest").ScriptBlock -ErrorAction SilentlyContinue
 
+<#
+.SYNOPSIS
+    Returns a human-readable diagnostic description of a geocoding result's accuracy.
+.DESCRIPTION
+    Evaluates MatchType (ROOFTOP, RANGE_INTERPOLATED, GEOMETRIC_CENTER, APPROXIMATE, COORDINATES)
+    and PartialMatch flags to describe whether the address resolved to an exact building rooftop,
+    an interpolated street segment, or an approximate city/centroid fallback.
+.PARAMETER Geo
+    Geocoding result object returned by Get-AddressCoordinates.
+.OUTPUTS
+    [string] Descriptive accuracy string (e.g. 'OK (Exact - ROOFTOP)', 'OK (Fallback: Approximate)').
+.EXAMPLE
+    $desc = Get-GeocodeStatusDescription -Geo $geoResult
+#>
 function Get-GeocodeStatusDescription {
     [CmdletBinding()]
     param(
         [Parameter()][object]$Geo
     )
+
     if (-not $Geo) { return 'NOT_PROCESSED' }
     if ($Geo.Status -eq 'OK') {
         if ($Geo.PartialMatch -and $Geo.MatchType -in 'APPROXIMATE', 'GEOMETRIC_CENTER') {
@@ -417,10 +594,49 @@ function Get-GeocodeStatusDescription {
     }
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 3. ROUTE CALCULATION (MAPY.COM ROUTING API)
-# ══════════════════════════════════════════════════════════════════════════════
+#endregion 3. Geocoding & Address Resolution Engine
 
+#region 4. Routing Engine & Navigation Web URLs
+
+<#
+.SYNOPSIS
+    Calculates driving route geometry and travel metrics using the Mapy.com Routing REST API.
+.DESCRIPTION
+    Builds an HTTP request against api.mapy.cz/v1/routing/route using lon,lat coordinate ordering.
+    Supports 'Fastest' (car_fast / car_fast_traffic) and 'Shortest' (car_short) profiles,
+    toll/highway avoidance flags, intermediate waypoints (up to 15), and parses distance, duration,
+    encoded polyline geometry, and individual segment leg metrics.
+.PARAMETER OriginLat
+    Latitude of the start location.
+.PARAMETER OriginLng
+    Longitude of the start location.
+.PARAMETER DestLat
+    Latitude of the destination location.
+.PARAMETER DestLng
+    Longitude of the destination location.
+.PARAMETER ApiKey
+    Mapy.com API key for authentication.
+.PARAMETER IntermediatePoints
+    Array of intermediate stop objects containing Latitude and Longitude.
+.PARAMETER RouteType
+    Optimization mode ('Fastest' or 'Shortest'). Defaults to 'Fastest'.
+.PARAMETER LanguageCode
+    Language code for response metadata ('en', 'de', 'pl', 'cs'). Defaults to 'en'.
+.PARAMETER Units
+    Distance unit system ('METRIC'). Defaults to 'METRIC'.
+.PARAMETER TrafficAware
+    Switch indicating whether real-time traffic delays should be considered ('car_fast_traffic').
+.PARAMETER AvoidTolls
+    Switch to exclude toll roads from the calculated route.
+.PARAMETER AvoidHighways
+    Switch to exclude highways and motorways from the calculated route.
+.OUTPUTS
+    [PSCustomObject] Normalized route result object containing OdlegloscKm, CzasMin, DurationSeconds,
+    EncodedPolyline, RouteType, Legs, AvoidTolls, AvoidHighways, Status, and ErrorMessage.
+.EXAMPLE
+    $route = Get-CarRouteData -OriginLat 52.23 -OriginLng 21.01 -DestLat 50.06 -DestLng 19.94 -ApiKey $key
+    if ($route.Status -eq 'OK') { Write-Host "$($route.OdlegloscKm) km in $($route.CzasMin) min" }
+#>
 function Get-CarRouteData {
     [CmdletBinding()]
     param(
@@ -448,7 +664,7 @@ function Get-CarRouteData {
 
     $lang = if ($LanguageCode) { ($LanguageCode -split '[-_]')[0].ToLower() } else { 'en' }
 
-    # Build base URL — Mapy.com uses lon,lat coordinate order
+    # Build base URL — Important: Mapy.com requires lon,lat coordinate order!
     $RoutesUrl = "https://api.mapy.cz/v1/routing/route" +
         "?start=$OriginLng,$OriginLat" +
         "&end=$DestLng,$DestLat" +
@@ -460,7 +676,7 @@ function Get-CarRouteData {
     if ($AvoidTolls) { $RoutesUrl += '&avoidToll=true' }
     if ($AvoidHighways) { $RoutesUrl += '&avoidHighways=true' }
 
-    # Add waypoints (up to 15)
+    # Add waypoints (up to 15 supported by Mapy.com API)
     if ($null -ne $IntermediatePoints -and @($IntermediatePoints).Count -gt 0) {
         foreach ($pt in $IntermediatePoints) {
             if ($null -ne $pt -and $pt.Latitude -and $pt.Longitude) {
@@ -490,23 +706,22 @@ function Get-CarRouteData {
             }
         }
 
-        # Parse response
+        # Parse overall distance and travel duration
         $DistanceMeters  = [int64]$Response.length
         $DistanceKm      = [math]::Round($DistanceMeters / 1000.0, 2)
         $DurationSec     = [double]$Response.duration
         $DurationMinutes = [math]::Round($DurationSec / 60.0, 0)
 
-        # Geometry — when format=polyline, the geometry field is the encoded polyline string
+        # Geometry — when format=polyline, geometry field is the encoded polyline string
         $Polyline = $null
         if ($Response.geometry -is [string]) {
             $Polyline = $Response.geometry
         }
         elseif ($Response.geometry -and $Response.geometry.geometry -and $Response.geometry.geometry.coordinates) {
-            # GeoJSON fallback — would need conversion to polyline, but we request polyline format
             $Polyline = $null
         }
 
-        # Parse route parts (legs between waypoints)
+        # Parse individual route parts (legs between intermediate waypoints)
         $Legs = @()
         if ($Response.parts) {
             foreach ($part in $Response.parts) {
@@ -556,6 +771,25 @@ function Get-CarRouteData {
     }
 }
 
+<#
+.SYNOPSIS
+    Generates a direct web browser link to view the route on Mapy.com.
+.DESCRIPTION
+    Constructs an interactive URL allowing the user to open and inspect the calculated route
+    with all origin, destination, and intermediate waypoint stops in a standard web browser.
+.PARAMETER Origin
+    Origin address string or "lat,lng" coordinate pair.
+.PARAMETER Destination
+    Destination address string or "lat,lng" coordinate pair.
+.PARAMETER Waypoints
+    Optional array of intermediate waypoint stop strings or objects.
+.PARAMETER TravelMode
+    Travel mode parameter ('driving'). Defaults to 'driving'.
+.OUTPUTS
+    [string] Full interactive web navigation URL.
+.EXAMPLE
+    $url = Get-MapyComUrl -Origin "52.23,21.01" -Destination "50.06,19.94"
+#>
 function Get-MapyComUrl {
     [CmdletBinding()]
     param(
@@ -564,6 +798,7 @@ function Get-MapyComUrl {
         [Parameter()][object[]]$Waypoints = @(),
         [Parameter()][string]$TravelMode = 'driving'
     )
+
     $OriginEnc = [System.Uri]::EscapeDataString($Origin.Trim())
     $DestEnc = [System.Uri]::EscapeDataString($Destination.Trim())
     $Url = "https://mapy.com/fnc/v1/route?start=$OriginEnc&end=$DestEnc"
@@ -593,10 +828,33 @@ function Get-MapyComUrl {
     return $Url
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 4. PNG MAP GENERATION AND RENDERING (MAPY.COM STATIC MAPS API + GDI+ OVERLAY)
-# ══════════════════════════════════════════════════════════════════════════════
+#endregion 4. Routing Engine & Navigation Web URLs
 
+#region 5. Static Map Generation & Dynamic GDI+ Overlay Rendering
+# ==============================================================================
+# 5. STATIC MAP GENERATION & DYNAMIC GDI+ OVERLAY RENDERING
+# ==============================================================================
+
+<#
+.SYNOPSIS
+    Wraps text into one or two display lines according to maximum pixel width.
+.DESCRIPTION
+    Measures a given text string against a target GDI+ graphics surface and font.
+    If the string exceeds MaxW, it splits words across up to two lines and appends
+    an ellipsis if the text still exceeds available space.
+.PARAMETER G
+    The System.Drawing.Graphics measuring context.
+.PARAMETER Text
+    The string text to measure and word-wrap.
+.PARAMETER F
+    The System.Drawing.Font used for rendering.
+.PARAMETER MaxW
+    The maximum allowable width in floating-point pixels.
+.OUTPUTS
+    [string[]] Array containing 1 or 2 wrapped string lines.
+.EXAMPLE
+    $lines = Get-WrappedLines -G $gfx -Text "A very long street address" -F $font -MaxW 250.0
+#>
 function Get-WrappedLines {
     param(
         [System.Drawing.Graphics]$G,
@@ -604,20 +862,33 @@ function Get-WrappedLines {
         [System.Drawing.Font]$F,
         [float]$MaxW
     )
+    # Return empty array for null/whitespace input
     if ([string]::IsNullOrWhiteSpace($Text)) { return [string[]]@('') }
+    
+    # If text fits within maximum allowed width in a single line, return immediately
     if ($G.MeasureString($Text, $F).Width -le $MaxW) { return [string[]]@($Text) }
+
+    # Split into words and greedily pack into line 1, then line 2
     $Words = $Text -split '\s+'
     $L1 = ''; $L2 = ''; $On2 = $false
     foreach ($W in $Words) {
         if (-not $On2) {
             $T = if ($L1) { "$L1 $W" } else { $W }
-            if ($G.MeasureString($T, $F).Width -le $MaxW) { $L1 = $T }
-            else { $On2 = $true; $L2 = $W }
+            if ($G.MeasureString($T, $F).Width -le $MaxW) { 
+                $L1 = $T 
+            }
+            else { 
+                $On2 = $true
+                $L2 = $W 
+            }
         }
         else {
             $T2 = if ($L2) { "$L2 $W" } else { $W }
-            if ($G.MeasureString($T2, $F).Width -le $MaxW) { $L2 = $T2 }
+            if ($G.MeasureString($T2, $F).Width -le $MaxW) { 
+                $L2 = $T2 
+            }
             else {
+                # Truncate second line with ellipsis if overflowing boundary
                 if ($L2.Length -gt 3) { $L2 = $L2.Substring(0, $L2.Length - 3) + '...' }
                 break
             }
@@ -626,6 +897,79 @@ function Get-WrappedLines {
     if ($L2) { return [string[]]@($L1, $L2) } else { return [string[]]@($L1) }
 }
 
+<#
+.SYNOPSIS
+    Downloads a static route map PNG from Mapy.cz and renders custom GDI+ header and footer overlays.
+.DESCRIPTION
+    Requests a static map image with start/stop/end markers and encoded route polyline
+    from the Mapy.cz Static Maps API (lon,lat coordinate order). Subsequently applies
+    dynamic GDI+ banners showing route details (route name, optimization type, addresses,
+    distance, duration, timestamp, waypoint badges, leg breakdown) without obscuring the map canvas.
+.PARAMETER EncodedPolyline
+    Google/Mapy.cz encoded polyline string representing the path geometry.
+.PARAMETER OriginLat
+    Latitude coordinate of the route start point.
+.PARAMETER OriginLng
+    Longitude coordinate of the route start point.
+.PARAMETER DestLat
+    Latitude coordinate of the route destination point.
+.PARAMETER DestLng
+    Longitude coordinate of the route destination point.
+.PARAMETER OutputPath
+    Local filesystem path where the generated PNG image will be saved.
+.PARAMETER ApiKey
+    Mapy.cz REST API authorization key.
+.PARAMETER Width
+    Desired canvas width in pixels (clamped to max 1024). Defaults to 900.
+.PARAMETER Height
+    Desired canvas height in pixels (clamped to max 1024). Defaults to 600.
+.PARAMETER RoutePoints
+    Optional array of route point objects containing Lat/Lng, addresses, and leg stats.
+.PARAMETER AddressTextA
+    Display text for starting location address.
+.PARAMETER AddressTextB
+    Display text for destination location address.
+.PARAMETER DistanceText
+    Formatted total distance text (e.g., "123.4 km").
+.PARAMETER DurationText
+    Formatted total duration text (e.g., "1h 45m").
+.PARAMETER HeaderLeftText
+    Fallback text for top-left header overlay.
+.PARAMETER HeaderRightText
+    Fallback text for top-right header overlay.
+.PARAMETER ContractText
+    Contract or identifier text for header display.
+.PARAMETER DirectionText
+    Direction or route type text for header display.
+.PARAMETER Description
+    Detailed route description.
+.PARAMETER GeneratedDate
+    Custom generation timestamp string.
+.PARAMETER LanguageCode
+    Localization code ('en', 'pl', 'de') for labels. Defaults to 'en'.
+.PARAMETER StartRaw
+    Raw input address string for starting point.
+.PARAMETER StartGeocoded
+    Normalized geocoded address for starting point.
+.PARAMETER EndRaw
+    Raw input address string for destination point.
+.PARAMETER EndGeocoded
+    Normalized geocoded address for destination point.
+.PARAMETER WaypointsList
+    Array of intermediate stop addresses or objects.
+.PARAMETER RouteName
+    Primary name or title of the route.
+.PARAMETER RouteType
+    Optimization profile ('Fastest', 'Shortest', 'Eco').
+.PARAMETER Legs
+    Array of route leg summary objects containing DistanceKm and DurationMin.
+.PARAMETER OverlayConfig
+    Overlay layout configuration object or JSON string controlling panels and properties.
+.OUTPUTS
+    [bool] True if map was successfully downloaded and rendered, false otherwise.
+.EXAMPLE
+    Save-RouteMapPng -EncodedPolyline $poly -OriginLat 52.23 -OriginLng 21.01 -DestLat 50.06 -DestLng 19.94 -OutputPath "C:\Temp\route.png" -ApiKey $key
+#>
 function Save-RouteMapPng {
     [CmdletBinding()]
     param(
@@ -661,15 +1005,18 @@ function Save-RouteMapPng {
         [Parameter()][object]$OverlayConfig = $null
     )
 
+    # Ensure TLS 1.2+ is active for HTTPS REST calls
     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls11 -bor [System.Net.SecurityProtocolType]::Tls
 
-    # Clamp dimensions to Mapy.com max of 1024
+    # Clamp dimensions to Mapy.com maximum allowed resolution of 1024x1024
     $Width  = [math]::Min($Width, 1024)
     $Height = [math]::Min($Height, 1024)
 
+    # Extract 2-letter language code (e.g., 'pl', 'de', 'en')
     $lang = if ($LanguageCode) { ($LanguageCode -split '[-_]')[0].ToLower() } else { 'en' }
 
-    # Build markers — Mapy.com uses semicolon-separated attributes and lon,lat order
+    # Format marker coordinates using InvariantCulture to avoid decimal comma issues
+    # IMPORTANT: Mapy.com API requires lon,lat coordinate sequence
     $originLngStr = [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "{0}", $OriginLng)
     $originLatStr = [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "{0}", $OriginLat)
     $destLngStr   = [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "{0}", $DestLng)
@@ -680,7 +1027,7 @@ function Save-RouteMapPng {
     # Start marker (green, label A)
     $MarkerParams.Add("&markers=" + [System.Uri]::EscapeDataString("color:green;size:large;label:A;$originLngStr,$originLatStr"))
 
-    # Intermediate markers
+    # Intermediate waypoint markers
     if ($null -ne $RoutePoints -and @($RoutePoints).Count -gt 0) {
         $IntermediatesOnly = @()
         if ($RoutePoints.Count -gt 2 -and
@@ -696,6 +1043,7 @@ function Save-RouteMapPng {
             })
         }
 
+        # Label intermediate stops: numbers 1-9, then letters C-Z (avoiding A/B start/end conflicts)
         $idx = 1
         foreach ($pt in $IntermediatesOnly) {
             if ($pt.Latitude -and $pt.Longitude) {
@@ -712,17 +1060,18 @@ function Save-RouteMapPng {
         }
     }
 
-    # End marker (red, label B)
+    # Destination marker (red, label B)
     $MarkerEnd = [System.Uri]::EscapeDataString("color:red;size:large;label:B;$destLngStr,$destLatStr")
     $MarkerParams.Add("&markers=$MarkerEnd")
 
-    # Shapes parameter for polyline
+    # Shapes parameter for encoded polyline route path
     $shapesParam = if ($EncodedPolyline) {
         "&shapes=" + [System.Uri]::EscapeDataString("color:#0066FF;width:4;path:[enc($EncodedPolyline)]")
     } else {
         ""
     }
 
+    # Construct complete Mapy.com Static Maps REST API query URL
     $StaticMapUrl = ("https://api.mapy.cz/v1/static/map" +
         "?width=$Width&height=$Height" +
         "&format=png" +
@@ -733,11 +1082,13 @@ function Save-RouteMapPng {
         "&apikey=$ApiKey")
 
     try {
+        # Ensure destination directory exists on disk
         $TargetDir = Split-Path -Parent $OutputPath
         if (-not [string]::IsNullOrWhiteSpace($TargetDir) -and -not (Test-Path $TargetDir)) {
             New-Item -ItemType Directory -Path $TargetDir -Force | Out-Null
         }
 
+        # Download raw map tile from Mapy.cz (skip during offline test runs)
         if ($ApiKey -ne 'OFFLINE_TEST') {
             $wc = [System.Net.WebClient]::new()
             try {
@@ -748,7 +1099,7 @@ function Save-RouteMapPng {
             }
         }
 
-        # Resolve overlay configuration
+        # Resolve overlay configuration (parse JSON string if provided)
         if ($OverlayConfig -is [string] -and -not [string]::IsNullOrWhiteSpace($OverlayConfig)) {
             try { $OverlayConfig = $OverlayConfig | ConvertFrom-Json } catch { }
         }
@@ -775,7 +1126,7 @@ function Save-RouteMapPng {
         $enableTop = if ($null -ne $OverlayConfig.EnableTopOverlay) { [bool]$OverlayConfig.EnableTopOverlay } else { $true }
         $enableBtm = if ($null -ne $OverlayConfig.EnableBottomOverlay) { [bool]$OverlayConfig.EnableBottomOverlay } else { $true }
 
-        # Check if PointDistances option is enabled
+        # Check if PointDistances leg breakdown option is enabled
         $showPointDistances = $false
         if ($OverlayConfig) {
             $ovProps = if ($OverlayConfig.Properties) {
@@ -800,7 +1151,7 @@ function Save-RouteMapPng {
             }
         }
 
-        # Resolve legs list
+        # Resolve route legs list for distance breakdown
         $legParts = [System.Collections.Generic.List[string]]::new()
         $legsToUse = if ($Legs -and @($Legs).Count -gt 0) {
             @($Legs)
@@ -831,7 +1182,7 @@ function Save-RouteMapPng {
         $legsPrefix = switch ($lang) { 'de' { 'Etappen: ' } 'pl' { 'Odcinki: ' } default { 'Legs: ' } }
         $legsText   = ($legParts -join '  |  ')
 
-        # Resolve data values
+        # Resolve address data values
         $addrStartGeo = if ($StartGeocoded) { $StartGeocoded } elseif ($AddressTextA) { $AddressTextA } else { '' }
         $addrStartRaw = if ($StartRaw) { $StartRaw } else { '' }
         $addrEndGeo   = if ($EndGeocoded) { $EndGeocoded } elseif ($AddressTextB) { $AddressTextB } else { '' }
@@ -852,6 +1203,7 @@ function Save-RouteMapPng {
             }
         }
 
+        # Resolve route name and optimization type labels
         $nameVal = if ($RouteName) { $RouteName } elseif ($HeaderLeftText) { $HeaderLeftText } elseif ($Description) { $Description.Trim() } elseif ($ContractText) { $ContractText } else { '' }
 
         $typeVal = if ($RouteType) { $RouteType } elseif ($HeaderRightText) { $HeaderRightText } elseif ($DirectionText) { $DirectionText } else { '' }
@@ -879,6 +1231,7 @@ function Save-RouteMapPng {
 
         $dateVal = if ($GeneratedDate) { $GeneratedDate } else { (Get-Date -Format 'yyyy-MM-dd  HH:mm') }
 
+        # Process waypoint items for footer display
         $wpItems = [System.Collections.Generic.List[PSCustomObject]]::new()
         $rawWpList = if ($WaypointsList -and @($WaypointsList).Count -gt 0) {
             $WaypointsList
@@ -919,7 +1272,7 @@ function Save-RouteMapPng {
             }
         }
 
-        # Build active property items map
+        # Build active property items mapping table
         $propDataMap = @{
             'StartGeocoded'  = @{ Id='StartGeocoded';  Kind='address';        Badge='A: '; BadgeColor='Green'; Text=$addrStartGeo }
             'StartRaw'       = @{ Id='StartRaw';       Kind='address';        Badge='A: '; BadgeColor='Green'; Text=$addrStartRaw }
@@ -1002,10 +1355,12 @@ function Save-RouteMapPng {
         $MaTopOverlay = ($enableTop -and $topItems.Count -gt 0)
         $MaBottomOverlay = ($enableBtm -and $btmItems.Count -gt 0)
 
+        # Apply GDI+ Header and Footer canvas overlay rendering
         if ($MaTopOverlay -or $MaBottomOverlay) {
             try {
                 Add-Type -AssemblyName System.Drawing
 
+                # Read downloaded static map image into memory stream
                 $FileBytes = [System.IO.File]::ReadAllBytes($OutputPath)
                 $MemStream = [System.IO.MemoryStream]::new($FileBytes)
                 $BitmapSrc = [System.Drawing.Bitmap]::new($MemStream)
@@ -1013,7 +1368,7 @@ function Save-RouteMapPng {
                 $ActualW = $BitmapSrc.Width
                 $ActualH = $BitmapSrc.Height
 
-                # Fonts definition
+                # Standard typography fonts definition
                 $FontTopTitle = [System.Drawing.Font]::new('Segoe UI', 10.0, [System.Drawing.FontStyle]::Bold)
                 $FontTopType  = [System.Drawing.Font]::new('Segoe UI', 10.0, [System.Drawing.FontStyle]::Bold)
                 $FontBadge    = [System.Drawing.Font]::new('Segoe UI', 9.0,  [System.Drawing.FontStyle]::Bold)
@@ -1025,11 +1380,11 @@ function Save-RouteMapPng {
                 $PadX  = 14
                 $LineH = 20
 
-                # Pre-measurement Graphics
+                # Pre-measurement GDI+ Graphics context
                 $dummyBmp = [System.Drawing.Bitmap]::new(1, 1)
                 $measGfx  = [System.Drawing.Graphics]::FromImage($dummyBmp)
 
-                # Helper scriptblock to group items by Order
+                # Group items by order index and alignment into rows
                 $BuildRows = {
                     param($items)
                     $orders = @($items | Select-Object -ExpandProperty Order -Unique | Sort-Object)
@@ -1058,7 +1413,7 @@ function Save-RouteMapPng {
                 $topRows = @(if ($MaTopOverlay) { & $BuildRows $topItems } else { @() })
                 $btmRows = @(if ($MaBottomOverlay) { & $BuildRows $btmItems } else { @() })
 
-                # Measure row heights
+                # Measure row heights dynamically with wrapping support
                 $MeasureRows = {
                     param($rows, $availWidth)
                     foreach ($row in @($rows)) {
@@ -1110,7 +1465,7 @@ function Save-RouteMapPng {
                 $measGfx.Dispose()
                 $dummyBmp.Dispose()
 
-                # Calculate banner heights
+                # Calculate banner dimensions
                 $TopPad = 8; $TopBotPad = 8; $TopRowSpacing = 4
                 $TopBarH = 0
                 if ($MaTopOverlay -and @($topRows).Count -gt 0) {
@@ -1131,19 +1486,20 @@ function Save-RouteMapPng {
                 $FinalW = $ActualW
                 $FinalH = $ActualH + $TopBarH + $BtmBarH
 
+                # Allocate extended canvas bitmap
                 $Bitmap = [System.Drawing.Bitmap]::new($FinalW, $FinalH, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
                 $Graphics = [System.Drawing.Graphics]::FromImage($Bitmap)
                 $Graphics.SmoothingMode     = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
                 $Graphics.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAliasGridFit
 
-                # 1. Background fill
+                # 1. Fill dark modern slate background (#0F172A)
                 $BrushBg = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255, 15, 23, 42))
                 $Graphics.FillRectangle($BrushBg, 0, 0, $FinalW, $FinalH)
 
-                # 2. Draw map image in the middle
+                # 2. Draw pristine map image in the center section
                 $Graphics.DrawImage($BitmapSrc, 0, $TopBarH, $ActualW, $ActualH)
 
-                # 3. Brushes & Pens
+                # 3. Create styling Brushes & Pens
                 $PenSep      = [System.Drawing.Pen]::new([System.Drawing.Color]::FromArgb(255, 51, 65, 85), 1.5)
                 $BrushWhite  = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255, 248, 250, 252))
                 $BrushYellow = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255, 250, 204, 21))
@@ -1251,14 +1607,14 @@ function Save-RouteMapPng {
                     foreach ($row in $rows) {
                         $leftX = [float]$PadX
 
-                        # 1. Left items
+                        # 1. Left aligned items
                         foreach ($it in $row.Left) {
                             & $DrawItem $it $leftX $curY
                             $w = & $MeasureItemWidth $it
                             $leftX += [float]($w + 14)
                         }
 
-                        # 2. Right items
+                        # 2. Right aligned items
                         $totalRightW = 0
                         foreach ($it in $row.Right) {
                             $totalRightW += [float]((& $MeasureItemWidth $it) + 12)
@@ -1270,7 +1626,7 @@ function Save-RouteMapPng {
                             $rightX += [float]($w + 12)
                         }
 
-                        # 3. Center items
+                        # 3. Centered items
                         $totalCenterW = 0
                         foreach ($it in $row.Center) {
                             $totalCenterW += [float]((& $MeasureItemWidth $it) + 12)
@@ -1286,7 +1642,7 @@ function Save-RouteMapPng {
                     }
                 }
 
-                # 4. Draw Top Header Banner
+                # 4. Render top header banner
                 if ($MaTopOverlay -and $TopBarH -gt 0 -and @($topRows).Count -gt 0) {
                     $Graphics.DrawLine($PenSep, 0, $TopBarH, $FinalW, $TopBarH)
                     $topStartY = [float]$TopPad
@@ -1296,7 +1652,7 @@ function Save-RouteMapPng {
                     & $RenderBannerRows $topRows $topStartY $TopRowSpacing
                 }
 
-                # 5. Draw Bottom Footer Banner
+                # 5. Render bottom footer banner
                 if ($MaBottomOverlay -and $BtmBarH -gt 0 -and @($btmRows).Count -gt 0) {
                     $BtmBarY = $TopBarH + $ActualH
                     $Graphics.DrawLine($PenSep, 0, $BtmBarY, $FinalW, $BtmBarY)
@@ -1304,7 +1660,7 @@ function Save-RouteMapPng {
                     & $RenderBannerRows $btmRows $btmStartY $BtmRowSpacing
                 }
 
-                # Dispose GDI+ objects
+                # Clean up GDI+ resources
                 $PenSep.Dispose()
                 $BrushBg.Dispose(); $BrushWhite.Dispose(); $BrushYellow.Dispose()
                 $BrushCyan.Dispose(); $BrushGreen.Dispose(); $BrushRed.Dispose(); $BrushMuted.Dispose()
@@ -1312,6 +1668,7 @@ function Save-RouteMapPng {
                 $FontBadge.Dispose(); $FontAddr.Dispose(); $FontDistLbl.Dispose(); $FontDist.Dispose(); $FontDate.Dispose()
                 $Graphics.Dispose()
 
+                # Save composed image back to output path
                 $Bitmap.Save($OutputPath, [System.Drawing.Imaging.ImageFormat]::Png)
                 $Bitmap.Dispose()
                 $BitmapSrc.Dispose()
@@ -1329,12 +1686,35 @@ function Save-RouteMapPng {
         return $false
     }
 }
+#endregion 5. Static Map Generation & Dynamic GDI+ Overlay Rendering
 
+#region 6. Dataset Ingestion & Batch Route File Parsing
+# ==============================================================================
+# 6. DATASET INGESTION & BATCH ROUTE FILE PARSING
+# ==============================================================================
+
+<#
+.SYNOPSIS
+    Finds the first property name matching a set of regular expression patterns.
+.DESCRIPTION
+    Iterates through candidate regex patterns and searches the supplied list of
+    available property names. Returns the first matching property name, or $null
+    if no match is found.
+.PARAMETER AvailableProperties
+    Array of property or column names present in the imported dataset.
+.PARAMETER Patterns
+    Array of regular expressions to match against property names.
+.OUTPUTS
+    [string] Matching property name if found, or $null.
+.EXAMPLE
+    $col = Find-MatchingPropertyName -AvailableProperties @('Adres', 'Miasto') -Patterns @('^adres$')
+#>
 function Find-MatchingPropertyName {
     param(
         [Parameter(Mandatory)][string[]]$AvailableProperties,
         [Parameter(Mandatory)][string[]]$Patterns
     )
+    # Search each pattern in order of priority against available headers
     foreach ($pattern in $Patterns) {
         $found = $AvailableProperties | Where-Object {
             $null -ne $_ -and $_.Trim() -match $pattern
@@ -1344,6 +1724,23 @@ function Find-MatchingPropertyName {
     return $null
 }
 
+<#
+.SYNOPSIS
+    Imports and normalizes route batch data from Excel, CSV, TSV, or JSON files.
+.DESCRIPTION
+    Parses heterogeneous external route files, automatically detecting structure
+    (multi-stop sequential waypoints or row-by-row route definitions). Auto-maps
+    Polish, English, and German column headers for Origin, Destination, Waypoints,
+    Route Name, and Route Type.
+.PARAMETER Path
+    Filesystem path to the .xlsx, .xls, .csv, .tsv, or .json data file.
+.PARAMETER Delimiter
+    Optional custom delimiter character for CSV/delimited text files.
+.OUTPUTS
+    [PSCustomObject] Normalized route data object containing Mode, Routes, RawData, and metadata.
+.EXAMPLE
+    $batch = Import-RouteDataFile -Path "C:\Data\Routes.xlsx"
+#>
 function Import-RouteDataFile {
     [CmdletBinding()]
     param(
@@ -1351,6 +1748,7 @@ function Import-RouteDataFile {
         [Parameter()][string]$Delimiter = ''
     )
 
+    # Validate file existence
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw "Plik wejściowy nie istnieje: $Path"
     }
@@ -1359,6 +1757,7 @@ function Import-RouteDataFile {
     $RawRows = $null
     $Format = $null
 
+    # 1. Ingest raw rows according to file extension
     switch ($Extension) {
         { $_ -in '.xlsx', '.xls' } {
             $Format = 'Excel'
@@ -1407,6 +1806,7 @@ function Import-RouteDataFile {
         }
     }
 
+    # Handle empty datasets
     if ($null -eq $RawRows -or $RawRows.Count -eq 0) {
         return [PSCustomObject]@{
             Mode       = 'Empty'
@@ -1418,10 +1818,10 @@ function Import-RouteDataFile {
         }
     }
 
-    # Analiza kolumn pierwszego wiersza
+    # Extract available column headers from the first record
     $PropNames = @($RawRows[0].PSObject.Properties.Name)
 
-    # Column matching patterns
+    # Column matching patterns for route names
     $ColRouteNamePatterns = @(
         '(?i)^(nazwa[\s_]*trasy|route[\s_]*name|routename|nazwatrasy)$',
         '(?i)(nazwa[\s_]*trasy|route[\s_]*name)',
@@ -1567,7 +1967,7 @@ function Import-RouteDataFile {
         }
     }
 
-    # 2. RouteList Mode (each row is a separate route)
+    # 2. RouteList Mode (each row represents a distinct route with start and destination)
     $ColStart = Find-MatchingPropertyName -AvailableProperties $PropNames -Patterns @(
         '(?i)^(start|origin|startpoint|poczat.*|poczatek|od|from|dom)$',
         '(?i)adres.*a|^a$',
@@ -1604,13 +2004,13 @@ function Import-RouteDataFile {
         }
         $typeVal = if ($ColRouteType) { [string]$row.$ColRouteType } else { $null }
 
-        # Normalizacja RouteType
-        if ($typeVal -match '(?i)eco|fuel|paliw|eko') { $typeVal = 'Eco' }
-        elseif ($typeVal -match '(?i)short|krot|krót') { $typeVal = 'Shortest' }
+        # Normalize RouteType (Mapy.com supports 'Fastest' and 'Shortest'; Eco is unsupported and falls back to 'Fastest')
+        if ($typeVal -match '(?i)short|krot|krót') { $typeVal = 'Shortest' }
         elseif ($typeVal -match '(?i)fast|szyb') { $typeVal = 'Fastest' }
+        elseif ($typeVal -match '(?i)eco|fuel|paliw|eko') { $typeVal = 'Fastest' }
         else { $typeVal = $null }
 
-        # Obsługa punktów pośrednich
+        # Parse and separate intermediate waypoints
         $waypointsList = [System.Collections.Generic.List[string]]::new()
         if ($ColWaypoints -and -not [string]::IsNullOrWhiteSpace($row.$ColWaypoints)) {
             $rawWp = $row.$ColWaypoints
@@ -1660,11 +2060,32 @@ function Import-RouteDataFile {
         }
     }
 }
+#endregion 6. Dataset Ingestion & Batch Route File Parsing
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 6. UNIVERSAL RESULTS EXPORT (EXCEL, CSV, JSON)
-# ══════════════════════════════════════════════════════════════════════════════
+#region 7. Multi-Format Route Results Exporter
+# ==============================================================================
+# 7. MULTI-FORMAT ROUTE RESULTS EXPORTER
+# ==============================================================================
 
+<#
+.SYNOPSIS
+    Exports route calculation and geocoding results to Excel (.xlsx), CSV, or JSON format.
+.DESCRIPTION
+    Extracts summary fields and detailed per-point waypoints from the route results list.
+    When exporting to Excel via ImportExcel, produces a dual-worksheet workbook ('Trasy'
+    and 'PunktyTrasy') with formatted tables and auto-filter. Automatically falls back
+    to semicolon-delimited CSV with UTF-8 BOM if ImportExcel is absent.
+.PARAMETER Results
+    Array of route execution result objects.
+.PARAMETER OutputPath
+    Target output file path.
+.PARAMETER Format
+    Target format ('Excel', 'CSV', 'JSON'). Defaults to 'Excel'.
+.OUTPUTS
+    [string] Path of the exported file.
+.EXAMPLE
+    Export-RouteResults -Results $routes -OutputPath "C:\Reports\Summary.xlsx" -Format Excel
+#>
 function Export-RouteResults {
     [CmdletBinding()]
     param(
@@ -1673,12 +2094,13 @@ function Export-RouteResults {
         [Parameter()][ValidateSet('Excel', 'CSV', 'JSON')][string]$Format = 'Excel'
     )
 
+    # Ensure parent output directory exists
     $TargetDir = Split-Path -Parent $OutputPath
     if (-not [string]::IsNullOrWhiteSpace($TargetDir) -and -not (Test-Path $TargetDir)) {
         New-Item -ItemType Directory -Path $TargetDir -Force | Out-Null
     }
 
-    # Extract flat summary rows (excluding nested Points array from main sheet/file)
+    # Extract flat summary rows and granular point-by-point route legs
     $RoutesFlat = [System.Collections.Generic.List[PSCustomObject]]::new()
     $PointsFlat = [System.Collections.Generic.List[PSCustomObject]]::new()
 
@@ -1699,7 +2121,7 @@ function Export-RouteResults {
         $map       = if ($r.MapPath) { [string]$r.MapPath } elseif ($r.MapaPath) { [string]$r.MapaPath } else { '' }
         $url       = if ($r.MapyComUrl) { [string]$r.MapyComUrl } elseif ($r.GoogleMapsUrl) { [string]$r.GoogleMapsUrl } else { '' }
 
-        # Build waypoints summary text
+        # Build human-readable waypoints summary text
         $pts = if ($r.RoutePoints) { $r.RoutePoints } elseif ($r.Points) { $r.Points } else { $null }
         $wpSummaryList = [System.Collections.Generic.List[string]]::new()
         if ($pts -and ($pts -is [System.Collections.IEnumerable])) {
@@ -1753,8 +2175,10 @@ function Export-RouteResults {
         })
     }
 
+    # Ensure UTF-8 with BOM for CSV exports across PS 5.1 and PS 7+
     $csvEncoding = if ($PSVersionTable.PSVersion.Major -ge 7) { 'utf8BOM' } else { 'UTF8' }
 
+    # Export results in the requested format
     switch ($Format) {
         'Excel' {
             if (-not (Get-Module -ListAvailable -Name ImportExcel)) {
@@ -1792,10 +2216,12 @@ function Export-RouteResults {
         }
     }
 }
+#endregion 7. Multi-Format Route Results Exporter
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 6. ENCODED POLYLINE DECODER & GPS EXPORTERS (GPX / KML)
-# ══════════════════════════════════════════════════════════════════════════════
+#region 8. Encoded Polyline Decoding & GPS Exporters (GPX / KML)
+# ==============================================================================
+# 8. ENCODED POLYLINE DECODING & GPS EXPORTERS (GPX / KML)
+# ==============================================================================
 
 if (-not ([System.Management.Automation.PSTypeName]'GoogleMapsPolylineDecoder').Type) {
     Add-Type -TypeDefinition @"
@@ -1849,12 +2275,27 @@ public static class GoogleMapsPolylineDecoder {
 "@ -ErrorAction SilentlyContinue
 }
 
+<#
+.SYNOPSIS
+    Decodes a Google/Mapy.cz encoded polyline string into an array of latitude/longitude coordinates.
+.DESCRIPTION
+    Uses the compiled .NET GoogleMapsPolylineDecoder class to decode ASCII-encoded
+    polyline strings with 5-decimal precision into GoogleMapsPoint objects with
+    Latitude and Longitude properties.
+.PARAMETER EncodedPolyline
+    The encoded ASCII polyline string.
+.OUTPUTS
+    [System.Collections.Generic.List[GoogleMapsPoint]] Decoded list of coordinate points.
+.EXAMPLE
+    $points = ConvertFrom-EncodedPolyline -EncodedPolyline "_p~iF~ps|U_ulLnnqC_mqNvxq`@"
+#>
 function ConvertFrom-EncodedPolyline {
     [Alias('ConvertFrom-GoogleEncodedPolyline')]
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][string]$EncodedPolyline)
     if ([string]::IsNullOrWhiteSpace($EncodedPolyline)) { return @() }
     try {
+        # Delegate polyline decoding to compiled C# routine for microsecond speed
         return [GoogleMapsPolylineDecoder]::Decode($EncodedPolyline)
     }
     catch {
@@ -1862,6 +2303,30 @@ function ConvertFrom-EncodedPolyline {
     }
 }
 
+<#
+.SYNOPSIS
+    Exports route geometry and waypoints to a standard GPS Exchange Format (GPX 1.1) XML file.
+.DESCRIPTION
+    Decodes the route polyline into GPS track coordinates and produces a compliant
+    GPX 1.1 file containing route metadata (distance, duration, UTC timestamp), waypoint
+    markers (<wpt>), and a track segment (<trk>/<trkseg>/<trkpt>).
+.PARAMETER OutputPath
+    Local filesystem path where the GPX file will be created.
+.PARAMETER RouteName
+    Descriptive name of the route. Defaults to 'Route'.
+.PARAMETER EncodedPolyline
+    Google/Mapy.cz encoded polyline string.
+.PARAMETER Waypoints
+    Optional array of waypoint objects with Latitude, Longitude, and address metadata.
+.PARAMETER DistanceKm
+    Calculated total route distance in kilometers.
+.PARAMETER DurationMin
+    Calculated total route travel duration in minutes.
+.OUTPUTS
+    [string] Path of the exported GPX file.
+.EXAMPLE
+    Export-RouteGpx -OutputPath "C:\Routes\route1.gpx" -EncodedPolyline $poly -DistanceKm 12.5 -DurationMin 18
+#>
 function Export-RouteGpx {
     [CmdletBinding()]
     param(
@@ -1874,6 +2339,8 @@ function Export-RouteGpx {
     )
 
     if ([string]::IsNullOrWhiteSpace($RouteName)) { $RouteName = 'Route' }
+    
+    # Decode polyline into high-resolution coordinate track
     $points = ConvertFrom-GoogleEncodedPolyline -EncodedPolyline $EncodedPolyline
     $safeName = [System.Security.SecurityElement]::Escape($RouteName)
     $timestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
@@ -1903,7 +2370,7 @@ function Export-RouteGpx {
         }
     }
 
-    # Route track
+    # Route track segments
     $null = $sb.AppendLine("  <trk>")
     $null = $sb.AppendLine("    <name>$safeName</name>")
     $null = $sb.AppendLine("    <trkseg>")
@@ -1916,12 +2383,36 @@ function Export-RouteGpx {
     $null = $sb.AppendLine("  </trk>")
     $null = $sb.AppendLine("</gpx>")
 
+    # Write output file in UTF-8 with BOM
     $outDir = Split-Path -Parent $OutputPath
     if ($outDir -and -not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir -Force | Out-Null }
     [System.IO.File]::WriteAllText($OutputPath, $sb.ToString(), [System.Text.UTF8Encoding]::new($true))
     return $OutputPath
 }
 
+<#
+.SYNOPSIS
+    Exports route geometry and waypoints to a Google Earth Keyhole Markup Language (KML 2.2) file.
+.DESCRIPTION
+    Decodes the route polyline and builds a standard KML 2.2 document containing route
+    styles, placemarks for intermediate waypoints, and an extruded 3D LineString track.
+.PARAMETER OutputPath
+    Local filesystem path where the KML file will be created.
+.PARAMETER RouteName
+    Descriptive name of the route. Defaults to 'Route'.
+.PARAMETER EncodedPolyline
+    Google/Mapy.cz encoded polyline string.
+.PARAMETER Waypoints
+    Optional array of waypoint objects with Latitude, Longitude, and address metadata.
+.PARAMETER DistanceKm
+    Calculated total route distance in kilometers.
+.PARAMETER DurationMin
+    Calculated total route travel duration in minutes.
+.OUTPUTS
+    [string] Path of the exported KML file.
+.EXAMPLE
+    Export-RouteKml -OutputPath "C:\Routes\route1.kml" -EncodedPolyline $poly -DistanceKm 12.5 -DurationMin 18
+#>
 function Export-RouteKml {
     [CmdletBinding()]
     param(
@@ -1934,6 +2425,8 @@ function Export-RouteKml {
     )
 
     if ([string]::IsNullOrWhiteSpace($RouteName)) { $RouteName = 'Route' }
+    
+    # Decode polyline into coordinates
     $points = ConvertFrom-GoogleEncodedPolyline -EncodedPolyline $EncodedPolyline
     $safeName = [System.Security.SecurityElement]::Escape($RouteName)
 
@@ -1950,7 +2443,7 @@ function Export-RouteKml {
     $null = $sb.AppendLine('      </LineStyle>')
     $null = $sb.AppendLine('    </Style>')
 
-    # Add stop markers
+    # Add stop placemark markers
     if ($Waypoints -and @($Waypoints).Count -gt 0) {
         foreach ($wp in $Waypoints) {
             if ($wp.Latitude -and $wp.Longitude) {
@@ -1967,7 +2460,7 @@ function Export-RouteKml {
         }
     }
 
-    # Add linestring track
+    # Add linestring track geometry
     $coordStrings = [System.Collections.Generic.List[string]]::new()
     foreach ($pt in $points) {
         $lat = [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "{0:F6}", [double]$pt.Latitude)
@@ -1986,16 +2479,47 @@ function Export-RouteKml {
     $null = $sb.AppendLine("  </Document>")
     $null = $sb.AppendLine("</kml>")
 
+    # Write output file in UTF-8 with BOM
     $outDir = Split-Path -Parent $OutputPath
     if ($outDir -and -not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir -Force | Out-Null }
     [System.IO.File]::WriteAllText($OutputPath, $sb.ToString(), [System.Text.UTF8Encoding]::new($true))
     return $OutputPath
 }
+#endregion 8. Encoded Polyline Decoding & GPS Exporters (GPX / KML)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 7. GOOGLE MAPS PLATFORM API USAGE & COST ESTIMATION HELPER
-# ══════════════════════════════════════════════════════════════════════════════
+#region 9. API Usage & Estimated Cost Calculation
+# ==============================================================================
+# 9. API USAGE & ESTIMATED COST CALCULATION
+# ==============================================================================
 
+<#
+.SYNOPSIS
+    Calculates estimated API usage charges across geocoding, routing, and static maps requests.
+.DESCRIPTION
+    Computes projected financial costs based on standard API rate cards for Geocoding,
+    ComputeRoutes Basic, ComputeRoutes Advanced, and Static Maps. Supports currency
+    conversion (USD, EUR, PLN) and calculates remaining monthly credits.
+.PARAMETER GeocodingCalls
+    Number of geocoding API requests executed.
+.PARAMETER RoutesBasicCalls
+    Number of standard routing requests executed.
+.PARAMETER RoutesAdvancedCalls
+    Number of advanced routing / traffic requests executed.
+.PARAMETER StaticMapsCalls
+    Number of static map image requests executed.
+.PARAMETER Currency
+    Target display currency ('USD', 'EUR', 'PLN'). Defaults to 'USD'.
+.PARAMETER UsdToEur
+    Exchange rate from USD to EUR. Defaults to 0.92.
+.PARAMETER UsdToPln
+    Exchange rate from USD to PLN. Defaults to 3.95.
+.PARAMETER MonthlyFreeCreditUsd
+    Monthly free tier credit amount in USD. Defaults to 200.0.
+.OUTPUTS
+    [PSCustomObject] Cost breakdown object with call counts, costs, and free credit status.
+.EXAMPLE
+    $cost = Get-EstimatedApiCost -GeocodingCalls 50 -RoutesBasicCalls 25 -Currency 'PLN'
+#>
 function Get-EstimatedApiCost {
     [CmdletBinding()]
     param(
@@ -2009,7 +2533,7 @@ function Get-EstimatedApiCost {
         [Parameter()][double]$MonthlyFreeCreditUsd = 200.0
     )
 
-    # Google Maps Platform Standard Tier Pricing:
+    # Pricing per call rates:
     # - Geocoding API: $0.005 per call ($5.00 / 1000)
     # - Routes API (ComputeRoutes Basic): $0.005 per call ($5.00 / 1000)
     # - Routes API (ComputeRoutes Advanced/Traffic): $0.010 per call ($10.00 / 1000)
@@ -2049,4 +2573,5 @@ function Get-EstimatedApiCost {
         IsWithinFreeCredit  = ($totalCostUsd -le $MonthlyFreeCreditUsd)
     }
 }
+#endregion 9. API Usage & Estimated Cost Calculation
 

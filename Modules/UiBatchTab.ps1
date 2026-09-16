@@ -8,12 +8,30 @@
     real-time log streaming, results DataGrid binding, and batch reports export (PDF, GPX, KML, Excel, CSV, JSON).
 .NOTES
     Encoding: UTF-8 with BOM
+    Compatibility: Windows PowerShell 5.1 and PowerShell 7+
 #>
 
 $script:LoadedBatchData = $null
 $script:BatchResultsList = [System.Collections.Generic.List[PSCustomObject]]::new()
 $script:BatchWorkerRunning = $false
 
+#region 1. Batch Logging Subsystem
+
+<#
+.SYNOPSIS
+    Appends a timestamped log entry to the batch execution log window and system log.
+.DESCRIPTION
+    Formats the message with HH:mm:ss timestamp and severity tag, appends to txtBatchLog,
+    scrolls to the end, and forwards to Write-AppLog for persistent logging.
+.PARAMETER Message
+    The log message text.
+.PARAMETER Level
+    Severity tag ('INFO', 'OK', 'WARN', 'ERROR'). Defaults to 'INFO'.
+.OUTPUTS
+    None.
+.EXAMPLE
+    Write-BatchLog -Message "Processing route 5 of 20..." -Level INFO
+#>
 function Write-BatchLog([string]$Message, [string]$Level = 'INFO') {
     $ts = (Get-Date).ToString('HH:mm:ss')
     $tag = switch ($Level) { 'OK' { '[OK]   ' } 'WARN' { '[WARN] ' } 'ERROR' { '[ERROR]' } default { '[INFO] ' } }
@@ -27,6 +45,24 @@ function Write-BatchLog([string]$Message, [string]$Level = 'INFO') {
 }
 Set-Item -Path "function:global:Write-BatchLog" -Value (Get-Item "function:Write-BatchLog").ScriptBlock -ErrorAction SilentlyContinue
 
+#endregion 1. Batch Logging Subsystem
+
+#region 2. Batch File Preview & DataGrid Column Mapping
+
+<#
+.SYNOPSIS
+    Loads an imported batch file and dynamically builds the preview DataGrid columns.
+.DESCRIPTION
+    Parses Excel (.xlsx/.xls), CSV, or JSON datasets using Import-RouteDataFile.
+    Configures DataGrid columns based on ingestion mode (SequentialStops vs RouteList)
+    and binds the parsed rows for user review and in-place editing before batch execution.
+.PARAMETER Path
+    Filesystem path to the batch route data file.
+.OUTPUTS
+    None.
+.EXAMPLE
+    Load-BatchFilePreviewInternal -Path "C:\Data\FleetRoutes.xlsx"
+#>
 function Load-BatchFilePreviewInternal([string]$Path) {
     if (-not (Test-Path $Path)) { return }
     $dgBatchInput = if ($script:Controls) { $script:Controls.dgBatchInput } else { $null }
@@ -203,6 +239,22 @@ function Load-BatchFilePreviewInternal([string]$Path) {
 }
 Set-Item -Path "function:global:Load-BatchFilePreviewInternal" -Value (Get-Item "function:Load-BatchFilePreviewInternal").ScriptBlock -ErrorAction SilentlyContinue
 
+#endregion 2. Batch File Preview & DataGrid Column Mapping
+
+#region 3. Interactive DataGrid In-Place Edit Synchronization
+
+<#
+.SYNOPSIS
+    Commits user edits in the preview DataGrid back into the active batch route collection.
+.DESCRIPTION
+    Commits active DataGrid row edits and synchronizes user-edited route names back to
+    $script:LoadedBatchData.Routes. Supports multi-row sequential stop naming where
+    a name defined in the first row cascades to the entire multi-point route.
+.OUTPUTS
+    None.
+.EXAMPLE
+    Sync-BatchPreviewToRoutes
+#>
 function Sync-BatchPreviewToRoutes {
     if (-not $script:LoadedBatchData -or -not $script:Controls -or -not $script:Controls.dgBatchInput) { return }
     $dg = $script:Controls.dgBatchInput
@@ -256,6 +308,26 @@ function Sync-BatchPreviewToRoutes {
 }
 Set-Item -Path "function:global:Sync-BatchPreviewToRoutes" -Value (Get-Item "function:Sync-BatchPreviewToRoutes").ScriptBlock -ErrorAction SilentlyContinue
 
+#endregion 3. Interactive DataGrid In-Place Edit Synchronization
+
+#region 4. Batch UI Event Registration & Execution Lifecycle
+
+<#
+.SYNOPSIS
+    Registers and binds all event handlers for the Batch Processing tab.
+.DESCRIPTION
+    Wires file browsing, drag-and-drop file ingestion, pre-batch geocode validation pass,
+    batch calculation start/stop, background runspace dispatching, progress tracking,
+    DataGrid sorting/filtering, and multi-format batch result exports (PDF, GPX, KML, Excel, CSV, JSON).
+.PARAMETER Controls
+    Hashtable containing mapped WPF UI controls.
+.PARAMETER Window
+    Optional reference to the main application Window.
+.OUTPUTS
+    None.
+.EXAMPLE
+    Register-UiBatchTabEvents -Controls $Controls -Window $script:MainWindow
+#>
 function Register-UiBatchTabEvents {
     [CmdletBinding()]
     param(
@@ -982,3 +1054,13 @@ function Register-UiBatchTabEvents {
         }
     })
 }
+
+#endregion 4. Batch UI Event Registration & Execution Lifecycle
+
+#region 5. Global Function Exports
+
+# Export function into global scope for GUI orchestrator
+Set-Item -Path "function:global:Register-UiBatchTabEvents" -Value (Get-Item "function:Register-UiBatchTabEvents").ScriptBlock -ErrorAction SilentlyContinue
+
+#endregion 5. Global Function Exports
+

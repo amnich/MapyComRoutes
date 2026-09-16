@@ -7,24 +7,108 @@
     using native headless Microsoft Edge, embedding base64 route maps and stop itineraries.
 .NOTES
     Encoding: UTF-8 with BOM
+    Compatibility: Windows PowerShell 5.1 and PowerShell 7+
 #>
 
+#region 1. Browser Engine Discovery
+
+<#
+.SYNOPSIS
+    Locates the Microsoft Edge executable (msedge.exe) on the host system.
+.DESCRIPTION
+    Searches standard 32-bit and 64-bit Program Files installation paths for msedge.exe,
+    falling back to PATH resolution via Get-Command. Returns the full executable path
+    or $null if Edge is not installed.
+.OUTPUTS
+    [string] Full path to msedge.exe, or $null if not located.
+.EXAMPLE
+    $edgePath = Find-EdgeExecutable
+    if (-not $edgePath) { Write-Error "Microsoft Edge is required for PDF generation." }
+#>
 function Find-EdgeExecutable {
     [CmdletBinding()]
     param()
 
+    # Search common Program Files locations on 64-bit and 32-bit Windows
     $candidates = @(
         "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
         "C:\Program Files\Microsoft\Edge\Application\msedge.exe"
     )
     foreach ($cand in $candidates) {
-        if (Test-Path $cand) { return $cand }
+        if (Test-Path $cand) { 
+            # Found via fixed installation path
+            return $cand 
+        }
     }
+
+    # Fall back to PATH environment search if installed in a non-standard location
     $cmd = Get-Command msedge.exe -ErrorAction SilentlyContinue
-    if ($cmd) { return $cmd.Source }
+    if ($cmd) { 
+        return $cmd.Source 
+    }
+
+    # Return $null if headless PDF rendering capability cannot be fulfilled
     return $null
 }
 
+#endregion 1. Browser Engine Discovery
+
+#region 2. Single Route PDF Generation
+
+<#
+.SYNOPSIS
+    Exports an individual route report to a PDF document using headless Microsoft Edge.
+.DESCRIPTION
+    Builds a styled, self-contained HTML document containing route KPIs (distance, duration,
+    optimization mode, avoid options), an embedded base64 route map image, and a complete stop
+    itinerary table. The HTML document is converted to PDF via headless Edge and saved to the
+    specified output file.
+.PARAMETER OutputPath
+    Target filesystem path where the generated PDF document will be written.
+.PARAMETER RouteName
+    Descriptive label or name for the route (e.g., "Prague to Brno"). Defaults to 'Route'.
+.PARAMETER DistanceKm
+    Total calculated route driving distance in kilometers.
+.PARAMETER DurationMin
+    Total calculated route driving duration in integer minutes.
+.PARAMETER RouteType
+    Routing optimization strategy used ('Fastest', 'Shortest', 'Eco'). Defaults to 'Fastest'.
+.PARAMETER EmissionType
+    Optional vehicle emission class or powertrain profile.
+.PARAMETER AvoidTolls
+    Indicates whether toll roads were excluded from the route calculation.
+.PARAMETER AvoidHighways
+    Indicates whether highways/freeways were excluded from the route calculation.
+.PARAMETER AvoidFerries
+    Indicates whether ferry crossings were excluded from the route calculation.
+.PARAMETER OriginAddress
+    Human-readable street address or location name for the starting point.
+.PARAMETER OriginLat
+    Latitude coordinate (WGS84) for the origin point.
+.PARAMETER OriginLng
+    Longitude coordinate (WGS84) for the origin point.
+.PARAMETER DestAddress
+    Human-readable street address or location name for the destination point.
+.PARAMETER DestLat
+    Latitude coordinate (WGS84) for the destination point.
+.PARAMETER DestLng
+    Longitude coordinate (WGS84) for the destination point.
+.PARAMETER Waypoints
+    Array of intermediate waypoint objects with Latitude, Longitude, and optional Address properties.
+.PARAMETER MapImagePath
+    Local filesystem path to a rendered static route map image (PNG) to embed as base64 in the report.
+.PARAMETER GoogleMapsUrl
+    Interactive Mapy.com or Google Maps web navigation URL for the external link button.
+.PARAMETER Language
+    Two-letter ISO language code for report localization ('en', 'de', 'pl'). Defaults to 'en'.
+.PARAMETER ReportTitle
+    Custom title displayed at the top of the report. Defaults to 'Route Report'.
+.OUTPUTS
+    [string] The verified OutputPath of the created PDF document.
+.EXAMPLE
+    Export-RoutePdfReport -OutputPath "C:\Reports\Route1.pdf" -RouteName "HQ to Branch" `
+        -DistanceKm 45.2 -DurationMin 38 -OriginAddress "Main St 1" -DestAddress "Park Ave 10"
+#>
 function Export-RoutePdfReport {
     [CmdletBinding()]
     param(
@@ -50,21 +134,24 @@ function Export-RoutePdfReport {
         [Parameter()][string]$ReportTitle = 'Route Report'
     )
 
+    # Sanitize route name fallback
     if ([string]::IsNullOrWhiteSpace($RouteName)) {
         $RouteName = 'Route'
     }
 
+    # Locate Microsoft Edge for headless printing
     $edgePath = Find-EdgeExecutable
     if (-not $edgePath) {
         throw "Microsoft Edge executable (msedge.exe) not found. PDF export requires Edge."
     }
 
+    # Ensure parent output directory exists before spawning PDF generation
     $outDir = Split-Path -Parent $OutputPath
     if ($outDir -and -not (Test-Path $outDir)) {
         New-Item -ItemType Directory -Path $outDir -Force | Out-Null
     }
 
-    # Map image base64 data URI
+    # Inline map image as base64 data URI to eliminate external asset dependencies during headless print
     $mapImgTag = ''
     if ($MapImagePath -and (Test-Path $MapImagePath)) {
         try {
@@ -72,7 +159,12 @@ function Export-RoutePdfReport {
             $b64 = [Convert]::ToBase64String($bytes)
             $mapImgTag = "<div class='map-container'><img src='data:image/png;base64,$b64' alt='Route Map' /></div>"
         }
-        catch { }
+        catch {
+            # Debugging note: Log or ignore image read failure so report generation can continue
+            if (Get-Command Write-AppLog -ErrorAction SilentlyContinue) {
+                Write-AppLog "Failed to embed map image '$MapImagePath': $($_.Exception.Message)" "WARN"
+            }
+        }
     }
 
     $genDate = (Get-Date).ToString("yyyy-MM-dd HH:mm")
@@ -80,21 +172,22 @@ function Export-RoutePdfReport {
     $safeOrigin = [System.Net.WebUtility]::HtmlEncode($OriginAddress)
     $safeDest = [System.Net.WebUtility]::HtmlEncode($DestAddress)
 
-    # Avoid options badges
+    # Render avoid options badges for routing diagnostics
     $avoidBadges = [System.Collections.Generic.List[string]]::new()
     if ($AvoidTolls)    { $avoidBadges.Add("<span class='badge badge-warn'>🚫 Avoid Tolls</span>") }
     if ($AvoidHighways) { $avoidBadges.Add("<span class='badge badge-warn'>🚫 Avoid Highways</span>") }
     if ($AvoidFerries)  { $avoidBadges.Add("<span class='badge badge-warn'>🚫 Avoid Ferries</span>") }
     $avoidHtml = if ($avoidBadges.Count -gt 0) { $avoidBadges -join ' ' } else { "<span class='badge badge-info'>None</span>" }
 
-    # Stop itinerary rows
+    # Build stop itinerary table: Origin -> Intermediate Waypoints -> Destination
     $rowsHtml = [System.Text.StringBuilder]::new()
-    # 1. Origin
+    
+    # 1. Origin row (Green Pin A)
     $oLatStr = [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "{0:F6}", $OriginLat)
     $oLngStr = [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "{0:F6}", $OriginLng)
     $null = $rowsHtml.AppendLine("<tr><td><span class='pin-badge pin-start'>A</span></td><td><strong>Origin (Start)</strong></td><td>$safeOrigin</td><td>$oLatStr, $oLngStr</td></tr>")
 
-    # 2. Waypoints
+    # 2. Waypoints rows (Blue numbered Pins 1..N)
     if ($Waypoints -and @($Waypoints).Count -gt 0) {
         $wIdx = 1
         foreach ($wp in $Waypoints) {
@@ -106,11 +199,12 @@ function Export-RoutePdfReport {
         }
     }
 
-    # 3. Destination
+    # 3. Destination row (Red Pin B)
     $dLatStr = [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "{0:F6}", $DestLat)
     $dLngStr = [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "{0:F6}", $DestLng)
     $null = $rowsHtml.AppendLine("<tr><td><span class='pin-badge pin-dest'>B</span></td><td><strong>Destination (End)</strong></td><td>$safeDest</td><td>$dLatStr, $dLngStr</td></tr>")
 
+    # Generate unique temporary HTML container file
     $tempHtml = Join-Path $env:TEMP "gmaps_report_$([System.Guid]::NewGuid().ToString('N')).html"
 
     $html = @"
@@ -206,24 +300,56 @@ function Export-RoutePdfReport {
 </html>
 "@
 
+    # Save HTML template using UTF-8 with BOM to preserve Polish/German accents in street addresses
     [System.IO.File]::WriteAllText($tempHtml, $html, [System.Text.UTF8Encoding]::new($true))
 
     try {
+        # Execute headless Chromium print with margins disabled to allow CSS @page rules to govern layout
         $p = Start-Process -FilePath $edgePath -ArgumentList "--headless", "--disable-gpu", "--no-pdf-header-footer", "--print-to-pdf=`"$OutputPath`"", "`"$tempHtml`"" -Wait -PassThru
         if ($p.ExitCode -eq 0 -and (Test-Path $OutputPath)) {
-            if (Get-Command Write-AppLog -ErrorAction SilentlyContinue) { Write-AppLog "Generated PDF report successfully: $OutputPath" "OK" }
+            if (Get-Command Write-AppLog -ErrorAction SilentlyContinue) { 
+                Write-AppLog "Generated PDF report successfully: $OutputPath" "OK" 
+            }
             return $OutputPath
         } else {
             throw "Edge process exited with code $($p.ExitCode) and PDF was not created."
         }
     }
     finally {
+        # Clean up temporary HTML file to avoid accumulating temp disk artifacts
         if (Test-Path $tempHtml) {
             Remove-Item -Path $tempHtml -Force -ErrorAction SilentlyContinue
         }
     }
 }
 
+#endregion 2. Single Route PDF Generation
+
+#region 3. Batch Summary PDF Generation
+
+<#
+.SYNOPSIS
+    Exports a comprehensive multi-route batch execution summary report to PDF.
+.DESCRIPTION
+    Aggregates an array of processed route objects into an A4 landscape PDF summary.
+    Calculates summary KPIs including total route count, successful vs failed routes,
+    accumulated mileage (km), and cumulative driving time, presenting all route legs
+    in a structured status table.
+.PARAMETER OutputPath
+    Target filesystem path where the generated batch summary PDF document will be written.
+.PARAMETER Routes
+    Array of route PSCustomObjects containing Id, Name, Start_Original, End_Original,
+    RouteType, DistanceKm, DurationMin, and Status.
+.PARAMETER BatchTitle
+    Heading displayed on the summary report. Defaults to 'Batch Processing Summary Report'.
+.PARAMETER SourceFileName
+    Name of the imported batch dataset file (e.g. 'Routes.xlsx' or 'Fleet.csv') for audit tracking.
+.OUTPUTS
+    [string] The verified OutputPath of the created batch PDF document.
+.EXAMPLE
+    Export-BatchPdfReport -OutputPath "C:\Reports\Batch_Summary.pdf" -Routes $batchResults `
+        -SourceFileName "TransportOrders.xlsx"
+#>
 function Export-BatchPdfReport {
     [CmdletBinding()]
     param(
@@ -233,11 +359,13 @@ function Export-BatchPdfReport {
         [Parameter()][string]$SourceFileName = ''
     )
 
+    # Locate Microsoft Edge for headless printing
     $edgePath = Find-EdgeExecutable
     if (-not $edgePath) {
         throw "Microsoft Edge executable (msedge.exe) not found. PDF export requires Edge."
     }
 
+    # Ensure parent output directory exists before spawning PDF generation
     $outDir = Split-Path -Parent $OutputPath
     if ($outDir -and -not (Test-Path $outDir)) {
         New-Item -ItemType Directory -Path $outDir -Force | Out-Null
@@ -249,6 +377,7 @@ function Export-BatchPdfReport {
     $totalDur = 0
     $successCount = 0
 
+    # Build route row elements and compute batch aggregates
     $rowsSb = [System.Text.StringBuilder]::new()
     foreach ($r in @($Routes)) {
         $dist = if ($r.DistanceKm) { [double]$r.DistanceKm } else { 0.0 }
@@ -257,6 +386,7 @@ function Export-BatchPdfReport {
         $totalDur  += $dur
         if ($r.Status -eq 'OK' -or $r.Status -eq 'Success') { $successCount++ }
 
+        # Render status badge: Green for OK/Success, Red for GeocodeFailed/RouteFailed
         $statBadge = if ($r.Status -eq 'OK' -or $r.Status -eq 'Success') {
             "<span class='badge' style='background:#dcfce7;color:#166534;'>OK</span>"
         } else {
@@ -273,6 +403,7 @@ function Export-BatchPdfReport {
     }
     $totalDistRound = [math]::Round($totalDist, 2)
 
+    # Generate unique temporary HTML container file
     $tempHtml = Join-Path $env:TEMP "gmaps_batch_report_$([System.Guid]::NewGuid().ToString('N')).html"
 
     $html = @"
@@ -336,24 +467,36 @@ function Export-BatchPdfReport {
 </html>
 "@
 
+    # Save HTML template using UTF-8 with BOM for headless printing
     [System.IO.File]::WriteAllText($tempHtml, $html, [System.Text.UTF8Encoding]::new($true))
 
     try {
+        # Execute headless Chromium print with landscape A4 profile
         $p = Start-Process -FilePath $edgePath -ArgumentList "--headless", "--disable-gpu", "--no-pdf-header-footer", "--print-to-pdf=`"$OutputPath`"", "`"$tempHtml`"" -Wait -PassThru
         if ($p.ExitCode -eq 0 -and (Test-Path $OutputPath)) {
-            if (Get-Command Write-AppLog -ErrorAction SilentlyContinue) { Write-AppLog "Generated batch PDF report successfully: $OutputPath" "OK" }
+            if (Get-Command Write-AppLog -ErrorAction SilentlyContinue) { 
+                Write-AppLog "Generated batch PDF report successfully: $OutputPath" "OK" 
+            }
             return $OutputPath
         } else {
             throw "Edge process exited with code $($p.ExitCode) and PDF was not created."
         }
     }
     finally {
+        # Clean up temporary HTML file
         if (Test-Path $tempHtml) {
             Remove-Item -Path $tempHtml -Force -ErrorAction SilentlyContinue
         }
     }
 }
 
+#endregion 3. Batch Summary PDF Generation
+
+#region 4. Global Function Exports
+
+# Export functions into global scope so caller scripts and GUI orchestrators can invoke them
 Set-Item -Path "function:global:Find-EdgeExecutable" -Value (Get-Item "function:Find-EdgeExecutable").ScriptBlock -ErrorAction SilentlyContinue
 Set-Item -Path "function:global:Export-RoutePdfReport" -Value (Get-Item "function:Export-RoutePdfReport").ScriptBlock -ErrorAction SilentlyContinue
 Set-Item -Path "function:global:Export-BatchPdfReport" -Value (Get-Item "function:Export-BatchPdfReport").ScriptBlock -ErrorAction SilentlyContinue
+
+#endregion 4. Global Function Exports

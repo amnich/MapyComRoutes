@@ -8,11 +8,26 @@
     and single-route exports (PDF, GPX, KML).
 .NOTES
     Encoding: UTF-8 with BOM
+    Compatibility: Windows PowerShell 5.1 and PowerShell 7+
 #>
 
 $script:LastManualResult = $null
 $script:ActiveManualRouteName = ''
 
+#region 1. Map View Mode Toggling
+
+<#
+.SYNOPSIS
+    Toggles visibility between the interactive WebView2 map container and static PNG preview image.
+.DESCRIPTION
+    Inspects radio buttons rbViewInteractive and rbViewStatic, switching between
+    pnlInteractiveMapHost (Chromium Leaflet.js) and imgMapPreview (GDI+ static PNG).
+    Displays the placeholder label when no route calculation result is available.
+.OUTPUTS
+    None.
+.EXAMPLE
+    Update-MapViewMode
+#>
 function Update-MapViewMode {
     [CmdletBinding()]
     param()
@@ -22,6 +37,7 @@ function Update-MapViewMode {
     $pnlHost        = if ($script:Controls) { $script:Controls.pnlInteractiveMapHost } else { $null }
     $lblPlaceholder = if ($script:Controls) { $script:Controls.lblMapPlaceholder } else { $null }
 
+    # If no route has been calculated yet, display initial placeholder prompt
     if (-not $script:LastManualResult) {
         if ($lblPlaceholder) { $lblPlaceholder.Visibility = [System.Windows.Visibility]::Visible }
         if ($imgPreview)     { $imgPreview.Visibility     = [System.Windows.Visibility]::Collapsed }
@@ -31,6 +47,7 @@ function Update-MapViewMode {
 
     if ($lblPlaceholder) { $lblPlaceholder.Visibility = [System.Windows.Visibility]::Collapsed }
 
+    # Toggle between Chromium vector interactive Leaflet map and static GDI+ PNG
     if ($rbInteractive -and $rbInteractive.IsChecked) {
         if ($imgPreview) { $imgPreview.Visibility = [System.Windows.Visibility]::Collapsed }
         if ($pnlHost)    { $pnlHost.Visibility    = [System.Windows.Visibility]::Visible }
@@ -41,6 +58,27 @@ function Update-MapViewMode {
 }
 Set-Item -Path "function:global:Update-MapViewMode" -Value (Get-Item "function:Update-MapViewMode").ScriptBlock -ErrorAction SilentlyContinue
 
+#endregion 1. Map View Mode Toggling
+
+#region 2. Manual Tab Event Registration & Wiring
+
+<#
+.SYNOPSIS
+    Registers and binds all user interface events and handlers for the Manual Route tab.
+.DESCRIPTION
+    Binds event handlers for waypoint controls (add, remove, clear, reorder up/down),
+    endpoint swapping, route calculation invocation via background MTA runspace,
+    autosuggest address completion popups, avoid toll/highway checkboxes, and
+    single-route export actions (PDF reports, GPX, KML, static PNG, and complete zip package).
+.PARAMETER Controls
+    Hashtable containing mapped WPF UI controls instantiated from XAML.
+.PARAMETER Window
+    Optional reference to the main application Window.
+.OUTPUTS
+    None.
+.EXAMPLE
+    Register-UiManualTabEvents -Controls $Controls -Window $script:MainWindow
+#>
 function Register-UiManualTabEvents {
     [CmdletBinding()]
     param(
@@ -933,3 +971,12 @@ function Register-UiManualTabEvents {
     }
     Update-MapViewMode
 }
+
+#endregion 2. Manual Tab Event Registration & Wiring
+
+#region 3. Global Function Exports
+
+# Export function into global scope for GUI orchestrator
+Set-Item -Path "function:global:Register-UiManualTabEvents" -Value (Get-Item "function:Register-UiManualTabEvents").ScriptBlock -ErrorAction SilentlyContinue
+
+#endregion 3. Global Function Exports

@@ -23,6 +23,7 @@
     Encoding: UTF-8 with BOM
     Compatibility: Windows PowerShell 5.1 & PowerShell 7+
     PS2EXE: 100% self-sufficient compilation via Build-Exe.ps1
+    Author: Adam Mnich with Github Copilot
 #>
 
 [CmdletBinding()]
@@ -48,7 +49,8 @@ if ([System.Threading.Thread]::CurrentThread.GetApartmentState() -ne [System.Thr
 # Establish application directory for both .ps1 and PS2EXE compiled execution
 $script:AppDir = if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
     $PSScriptRoot
-} else {
+}
+else {
     [System.IO.Path]::GetDirectoryName([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
 }
 if ([string]::IsNullOrWhiteSpace($PSScriptRoot)) {
@@ -91,6 +93,17 @@ $xamlString = Get-AppXaml
 $reader = [System.Xml.XmlReader]::Create([System.IO.StringReader]::new($xamlString))
 $window = [System.Windows.Markup.XamlReader]::Load($reader)
 $script:MainWindow = $window
+
+# Set default window size to 90% of screen on start (centered)
+$screenWidth = [System.Windows.SystemParameters]::PrimaryScreenWidth
+$screenHeight = [System.Windows.SystemParameters]::PrimaryScreenHeight
+if ($screenWidth -gt 0 -and $screenHeight -gt 0) {
+    $targetWidth = [math]::Round($screenWidth * 0.9)
+    $targetHeight = [math]::Round($screenHeight * 0.9)
+    $window.Width = [math]::Max($window.MinWidth, $targetWidth)
+    $window.Height = [math]::Max($window.MinHeight, $targetHeight)
+    $window.WindowStartupLocation = [System.Windows.WindowStartupLocation]::CenterScreen
+}
 
 # ── 7. Map Controls into Hashtable ───────────────────────────────────────────
 $Controls = [ordered]@{
@@ -177,27 +190,27 @@ Register-UiBatchTabEvents    -Controls $Controls -Window $window
 # Wire Toast Notification Buttons
 if ($Controls.btnToastClose) {
     $Controls.btnToastClose.Add_Click({
-        if ($Controls.pnlToastContainer) { $Controls.pnlToastContainer.Visibility = [System.Windows.Visibility]::Collapsed }
-        if ($script:ToastTimer) { try { $script:ToastTimer.Stop() } catch { } }
-    })
+            if ($Controls.pnlToastContainer) { $Controls.pnlToastContainer.Visibility = [System.Windows.Visibility]::Collapsed }
+            if ($script:ToastTimer) { try { $script:ToastTimer.Stop() } catch { } }
+        })
 }
 if ($Controls.btnToastAction) {
     $Controls.btnToastAction.Add_Click({
-        if ($Controls.btnToastAction.Tag -and (Test-Path $Controls.btnToastAction.Tag)) {
-            Start-Process $Controls.btnToastAction.Tag
-            if ($Controls.pnlToastContainer) { $Controls.pnlToastContainer.Visibility = [System.Windows.Visibility]::Collapsed }
-            if ($script:ToastTimer) { try { $script:ToastTimer.Stop() } catch { } }
-        }
-    })
+            if ($Controls.btnToastAction.Tag -and (Test-Path $Controls.btnToastAction.Tag)) {
+                Start-Process $Controls.btnToastAction.Tag
+                if ($Controls.pnlToastContainer) { $Controls.pnlToastContainer.Visibility = [System.Windows.Visibility]::Collapsed }
+                if ($script:ToastTimer) { try { $script:ToastTimer.Stop() } catch { } }
+            }
+        })
 }
 if ($Controls.btnToastActionFolder) {
     $Controls.btnToastActionFolder.Add_Click({
-        if ($Controls.btnToastActionFolder.Tag -and (Test-Path $Controls.btnToastActionFolder.Tag)) {
-            Start-Process explorer.exe $Controls.btnToastActionFolder.Tag
-            if ($Controls.pnlToastContainer) { $Controls.pnlToastContainer.Visibility = [System.Windows.Visibility]::Collapsed }
-            if ($script:ToastTimer) { try { $script:ToastTimer.Stop() } catch { } }
-        }
-    })
+            if ($Controls.btnToastActionFolder.Tag -and (Test-Path $Controls.btnToastActionFolder.Tag)) {
+                Start-Process explorer.exe $Controls.btnToastActionFolder.Tag
+                if ($Controls.pnlToastContainer) { $Controls.pnlToastContainer.Visibility = [System.Windows.Visibility]::Collapsed }
+                if ($script:ToastTimer) { try { $script:ToastTimer.Stop() } catch { } }
+            }
+        })
 }
 
 
@@ -207,7 +220,8 @@ if ($script:AppConfig.ApiKey) {
     $Controls.txtSettingsApiKeyVisible.Text = $script:AppConfig.ApiKey
     $Controls.lblApiBadge.Text = 'API: Configured'
     $Controls.lblApiBadge.Foreground = [System.Windows.Media.Brushes]::LightGreen
-} else {
+}
+else {
     $Controls.lblApiBadge.Text = 'API: Not Configured'
     $Controls.lblApiBadge.Foreground = [System.Windows.Media.Brushes]::Orange
 }
@@ -251,9 +265,11 @@ if ($Controls.cmbDefaultMapSize -and $script:AppConfig.MapWidth -and $script:App
 if ($script:AppConfig.DefaultRouteType) {
     if ($script:AppConfig.DefaultRouteType -eq 'Shortest' -and $Controls.rbTypeShortest) {
         $Controls.rbTypeShortest.IsChecked = $true
-    } elseif ($script:AppConfig.DefaultRouteType -eq 'Eco' -and $Controls.rbTypeEco) {
+    }
+    elseif ($script:AppConfig.DefaultRouteType -eq 'Eco' -and $Controls.rbTypeEco) {
         $Controls.rbTypeEco.IsChecked = $true
-    } elseif ($Controls.rbTypeFastest) {
+    }
+    elseif ($Controls.rbTypeFastest) {
         $Controls.rbTypeFastest.IsChecked = $true
     }
 
@@ -318,11 +334,11 @@ Update-ApiUsageBadgeText
 
 # ── 11. Window Closing Lifecycle ─────────────────────────────────────────────
 $window.Add_Closing({
-    if ($script:ActiveBatchTimer) { try { $script:ActiveBatchTimer.Stop() } catch { } }
-    if ($script:ActiveManualTimer) { try { $script:ActiveManualTimer.Stop() } catch { } }
-    if ($script:ActiveTestTimer) { try { $script:ActiveTestTimer.Stop() } catch { } }
-    if ($script:SyncState) { $script:SyncState.CancelRequested = $true }
-})
+        if ($script:ActiveBatchTimer) { try { $script:ActiveBatchTimer.Stop() } catch { } }
+        if ($script:ActiveManualTimer) { try { $script:ActiveManualTimer.Stop() } catch { } }
+        if ($script:ActiveTestTimer) { try { $script:ActiveTestTimer.Stop() } catch { } }
+        if ($script:SyncState) { $script:SyncState.CancelRequested = $true }
+    })
 
 # ── 12. Show Application Window ──────────────────────────────────────────────
 if (-not $NoShowDialog) {

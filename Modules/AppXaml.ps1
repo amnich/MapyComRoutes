@@ -1,20 +1,49 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    Google Maps Routes & Map Generator — WPF XAML Layout & Theme Subsystem.
+    Mapy.com Routes & Map Generator — WPF XAML Layout & Theme Subsystem.
 .DESCRIPTION
     Provides the complete XAML definition for the modern WPF Dark/Light mode UI,
     including interactive map container, geocode validation grid, avoid option controls,
     PDF/GPX/KML export buttons, and API cost tracking displays.
 .NOTES
     Encoding: UTF-8 with BOM
+    Compatibility: Windows PowerShell 5.1 and PowerShell 7+
 #>
 
+#region 1. WPF XAML Layout Definition
+
+<#
+.SYNOPSIS
+    Returns the complete WPF XAML UI layout string for the Mapy.com Route & Map Generator application.
+.DESCRIPTION
+    Supplies the raw XAML markup parsed by [System.Windows.Markup.XamlReader]::Load().
+    Defines dynamic theme resource keys (BgDark, BgCard, TextPrimary, AccentBlue, etc.),
+    three primary navigation tabs (Manual Calculator, Batch Processing, Settings),
+    an interactive WebView2/Leaflet map container, floating toast notifications, and
+    an expandable execution log drawer.
+.OUTPUTS
+    [string] The fully declarative XAML markup ready for instantiation by XamlReader.
+.EXAMPLE
+    $xamlText = Get-AppXaml
+    $window = [System.Windows.Markup.XamlReader]::Parse($xamlText)
+#>
 function Get-AppXaml {
     [CmdletBinding()]
     param()
 
-    [string]$xaml = @'
+    # Calculate default window dimensions as 90% of screen resolution
+    $winWidth = 1120
+    $winHeight = 880
+    try {
+        if ([System.Windows.SystemParameters]::PrimaryScreenWidth -gt 0 -and [System.Windows.SystemParameters]::PrimaryScreenHeight -gt 0) {
+            $winWidth = [math]::Max(920, [math]::Round([System.Windows.SystemParameters]::PrimaryScreenWidth * 0.9))
+            $winHeight = [math]::Max(700, [math]::Round([System.Windows.SystemParameters]::PrimaryScreenHeight * 0.9))
+        }
+    } catch { }
+
+    # The raw XAML document utilizes DynamicResource bindings so themes can be switched at runtime
+    [string]$xaml = (@'
 <Window
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -645,7 +674,6 @@ function Get-AppXaml {
                                         <ComboBoxItem Content="From Source / Default" Tag="FromSource" IsSelected="True"/>
                                         <ComboBoxItem Content="Fastest (Najszybsza)" Tag="Fastest"/>
                                         <ComboBoxItem Content="Shortest (Najkrótsza)" Tag="Shortest"/>
-                                        <ComboBoxItem Content="Eco (Fuel Efficient)" Tag="Eco"/>
                                     </ComboBox>
                                 </StackPanel>
                                 <StackPanel Grid.Column="3" Orientation="Horizontal">
@@ -1426,7 +1454,16 @@ function Get-AppXaml {
         </Border>
     </Grid>
 </Window>
-'@
+'@ -replace 'Height="880" Width="1120"', "Height=""$winHeight"" Width=""$winWidth""")
 
     return $xaml
 }
+
+#endregion 1. WPF XAML Layout Definition
+
+#region 2. Global Function Exports
+
+# Export function into global scope for caller scripts and GUI orchestrator
+Set-Item -Path "function:global:Get-AppXaml" -Value (Get-Item "function:Get-AppXaml").ScriptBlock -ErrorAction SilentlyContinue
+
+#endregion 2. Global Function Exports
