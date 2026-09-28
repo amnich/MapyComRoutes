@@ -7,7 +7,7 @@
     The script provides:
       1. Manual route calculation between origin, destination, and optional waypoints
       2. Batch loading of data files (JSON, CSV, Excel) with route lists or stop sequences
-      3. Route optimization modes: Fastest (travel time), Shortest (distance), Eco-friendly (fuel/energy efficiency)
+      3. Route optimization modes: Fastest (travel time), Shortest (distance)
       4. Address geocoding using Mapy.com Geocoding API
       5. Route computation using Mapy.com Routing API
       6. High-resolution PNG map rendering with highlighted polyline and numbered markers
@@ -43,7 +43,7 @@
     Export report format for batch processing: 'Excel', 'CSV', 'JSON', 'All', 'None'. Default: 'Excel'.
 
 .PARAMETER ApiKey
-    Google Maps API key. If omitted, resolved from GOOGLE_MAPS_API_KEY environment variable or DPAPI storage.
+    Mapy.com API key. If omitted, resolved from MAPY_COM_API_KEY environment variable or DPAPI storage.
 
 .PARAMETER OutputFolder
     Output directory for generated PNG maps and export files. Default: .\Results
@@ -74,7 +74,7 @@
 
 .EXAMPLE
     # Batch processing of Excel or JSON data file
-    .\Invoke-MapyComRoute.ps1 -InputFile ".\Samplesoutes_sample.xlsx" -RouteType Fastest -ExportFormat Excel
+    .\Invoke-MapyComRoute.ps1 -InputFile ".\Samples\routes_sample.xlsx" -RouteType Fastest -ExportFormat Excel
 
 .NOTES
     Encoding: UTF-8 with BOM
@@ -148,9 +148,21 @@ if (-not (Test-Path $FunctionsPath)) {
 
 # Resolve API key
 if ([string]::IsNullOrWhiteSpace($ApiKey)) {
-    # Attempt resolution from local DPAPI configuration
-    $AppDir = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'GoogleMapsRoutes'
+    if ($env:MAPY_COM_API_KEY) {
+        $ApiKey = $env:MAPY_COM_API_KEY
+    } elseif ($env:MAPY_API_KEY) {
+        $ApiKey = $env:MAPY_API_KEY
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($ApiKey)) {
+    # Attempt resolution from local DPAPI configuration (MapyComRoutes first, legacy GoogleMapsRoutes second)
+    $AppDir = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'MapyComRoutes'
     $CfgFile = Join-Path $AppDir 'config.json'
+    if (-not (Test-Path $CfgFile)) {
+        $legacyCfg = Join-Path (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'GoogleMapsRoutes') 'config.json'
+        if (Test-Path $legacyCfg) { $CfgFile = $legacyCfg }
+    }
     if (Test-Path $CfgFile) {
         try {
             $cfg = Get-Content -LiteralPath $CfgFile -Raw -Encoding UTF8 | ConvertFrom-Json

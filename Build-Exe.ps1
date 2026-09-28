@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    Compiles GoogleMapsRoutes-GUI.ps1 or Process-SchoolTransportRoutes-GUI.ps1
+    Compiles MapyComRoutes-GUI.ps1 or Process-SchoolTransportRoutes-GUI.ps1
     into a self-sufficient standalone executable (.EXE) using the PS2EXE module.
 
 .DESCRIPTION
@@ -13,8 +13,9 @@
 
 .PARAMETER Target
     Target application to compile:
-      - 'GoogleMapsRoutes'       : Main universal routing application (GoogleMapsRoutes-GUI.ps1) -> GoogleMapsRoutes.exe
+      - 'MapyComRoutes'          : Primary universal Mapy.com routing application (MapyComRoutes-GUI.ps1) -> MapyComRoutes.exe (Default)
       - 'SchoolTransportRoutes'  : School transport contract processor (Process-SchoolTransportRoutes-GUI.ps1) -> SchoolTransportRoutes.exe
+      - 'GoogleMapsRoutes'       : Legacy Google Maps routing application (GoogleMapsRoutes-GUI.ps1) -> GoogleMapsRoutes.exe
 
 .PARAMETER InputScript
     Path to input script (optional, overrides -Target).
@@ -36,7 +37,7 @@
 
 .EXAMPLE
     .\Build-Exe.ps1
-    Bundles helper scripts and localization.json, then compiles GoogleMapsRoutes.exe
+    Bundles helper scripts and localization.json, then compiles MapyComRoutes.exe
 
 .EXAMPLE
     .\Build-Exe.ps1 -Target SchoolTransportRoutes
@@ -63,7 +64,7 @@ param(
     [string]$OutputFile,
 
     [Parameter(Mandatory = $false)]
-    [string]$IconFile = "D:\Skrypty\GoogleMapsRoutes\Res\Logo_AM6.ico",
+    [string]$IconFile = "D:\Skrypty\MapyComRoutes\Res\Logo_AM6.ico",
 
     [Parameter(Mandatory = $false)]
     [switch]$NoBundle,
@@ -325,12 +326,16 @@ if (-not $BundledScriptPath) {
 
 $AppTitle = if ($Target -eq 'SchoolTransportRoutes') {
     'School Transport Route & Map Generator'
+} elseif ($Target -eq 'MapyComRoutes') {
+    'Mapy.com Route & Map Generator'
 } else {
     'Google Maps Route & Map Generator'
 }
 
 $AppDesc = if ($Target -eq 'SchoolTransportRoutes') {
-    'Tool for calculating Google Maps routes and generating maps for school transport contracts'
+    'Tool for calculating Mapy.com routes and generating maps for school transport contracts'
+} elseif ($Target -eq 'MapyComRoutes') {
+    'Enterprise Mapy.com multi-point route calculator and map generator supporting Fastest and Shortest routes with automatic proportional waypoint splitting, JSON, CSV, and Excel input'
 } else {
     'Generic Google Maps multi-point route calculator and map generator supporting Fastest, Shortest, and Eco routes with JSON, CSV, and Excel input'
 }
@@ -389,7 +394,7 @@ $CompileParams = @{
     Company     = 'Adam Mnich'
     Product     = $Target
     Copyright   = 'Copyright (c) 2026'
-    Version     = '2.0.0.0'
+    Version     = '2.2.0.0'
     NoError     = $true
     NoOutput    = $true
 }

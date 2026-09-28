@@ -40,6 +40,24 @@ Elevate usability, workflow ergonomics, and speed for both single-route planning
 - [x] **Request Call Statistics**: Replaced legacy Google Maps dollar cost estimation with Mapy.com API request counters tracking Session vs. Monthly requests, with live breakdown across Geocoding/Suggest (`/v1/suggest`, `/v1/geocode`), Routes API (`/v1/routing`), and Map Imagery/Tiles.
 - [x] **Billing Period Reset**: Displays active tracking month (`lblApiBillingPeriod`) and single-click month counter reset (`btnResetApiCounters`).
 
+### Milestone 7: Automatic Proportional Waypoint Splitting & Multi-Map Output (v2.2) — [COMPLETE]
+- [x] **Automatic Proportional Route Splitting (`Split-RoutePoints`)**: Automatically partitions routes exceeding Mapy.com's limit of 15 intermediate waypoints (17 total points: 1 start + 15 waypoints + 1 end) into $N = \lceil (P - 1) / 16 \rceil$ balanced parts.
+  - **Proportional Leg Balancing**: Distributes legs evenly across parts so leg counts differ by at most 1 (e.g. 24 points split in half into 12 legs / 13 points and 11 legs / 12 points).
+  - **Continuous Chaining Guarantee**: Invariant `Part[k].End == Part[k+1].Start` is strictly preserved across all sub-routes.
+- [x] **Multi-Map Image Generation**:
+  - Automatically renders $N$ individual sub-route PNG maps (`<name>_Part1ofN.png`, `<name>_Part2ofN.png`) with dedicated camera bounding boxes, markers, and distance badges.
+  - Automatically renders 1 combined stitched overview PNG map (`<name>.png`) with full concatenated polyline and markers across the entire trip.
+- [x] **High-Performance C# Polyline Codec (`GoogleMapsPolylineCodec`)**:
+  - Integrated zero-dependency C# 5.0 compatible polyline encoder and decoder via `Add-Type`.
+  - Enables microsecond polyline encoding, decoding, and lossless concatenation across partitioned sub-routes with coordinate deduplication at split junctions.
+- [x] **Universal Sequential Data Ingestion (`Import-RouteDataFile`)**:
+  - Automatically detects and splits tabular route sequences (`SequentialStops` and grouped `RouteList`) exceeding 17 points across Excel (`.xlsx`), CSV, and JSON formats into chained sub-routes with labeled part designations (`Trasa (Part 1/2)`).
+- [x] **Expanded UI Route Builder**:
+  - Increased manual waypoint list limit from 25 to 200 stops in `UiManualTab.ps1`.
+  - Background calculation (`AsyncWorkers.ps1`) transparently renders and bundles all sub-route maps for instant inspection.
+- [x] **Trilingual Localization Parity**:
+  - Registered and synchronized all waypoint splitting and capacity keys (`ManualWaypoints`, `MsgMaxWaypoints`, `MsgLangReloadedTitle`) in `localization.json` with 100% key parity across English, German, and Polish.
+
 ---
 
 ## Technical Verification & Guardrails

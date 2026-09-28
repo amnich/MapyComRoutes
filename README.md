@@ -1,4 +1,4 @@
-﻿# Mapy.com Routes & Map Generator v2.1
+﻿# Mapy.com Routes & Map Generator v2.2
 
 An enterprise-grade, universal PowerShell and WPF application for multi-stop vehicle route calculation, multi-criteria optimization (**Fastest**, **Shortest**), and presentation-ready PNG map generation powered by the **[Mapy.com REST API](https://developer.mapy.com/rest-api-mapy-cz/)** (Routing API, Geocoding API, and Static Maps API).
 
@@ -7,10 +7,16 @@ An enterprise-grade, universal PowerShell and WPF application for multi-stop veh
 
 ## Key Features
 
-### 1. Multi-Stop Route Optimization (Mapy.com Routing API)
+### 1. Multi-Stop Route Optimization & Automatic Proportional Waypoint Splitting
 - **Origin & Destination**: Geocoded with regional structure resolution, postal code, and rooftop accuracy.
-- **Waypoints**: Up to 15 intermediate stops with interactive reordering (Move Up / Move Down).
-- **Leg-by-Leg Metrics**: Queries Mapy.com Routing API to capture exact distances and travel times between consecutive stops.
+- **Waypoints & Automatic Proportional Splitting**:
+  - The Mapy.com Routing REST API natively supports up to 15 intermediate waypoints (17 points total: 1 start + 15 waypoints + 1 end).
+  - When the input contains more than 15 intermediate stops (or > 17 points total), the engine **automatically partitions the route into $N = \lceil (P - 1) / 16 \rceil$ proportional parts**.
+  - **Proportional Leg Balancing**: Steps distribute evenly across parts (e.g. 24 points split in half into 12 legs / 13 points and 11 legs / 12 points; legs differ by at most 1).
+  - **Continuous Chaining**: The split endpoint of Part $k$ is preserved as the start point of Part $k+1$ (`Part[k].End == Part[k+1].Start`).
+  - **Multi-Map Generation**: Renders $N$ separate sub-route PNG maps (`<name>_Part1ofN.png`, `<name>_Part2ofN.png`) with dedicated bounding boxes and markers, plus 1 combined stitched overview map (`<name>.png`).
+  - **High-Performance C# Polyline Codec**: Custom `GoogleMapsPolylineCodec` provides microsecond encoding/decoding for seamless polyline concatenation across split sub-routes.
+- **Leg-by-Leg Metrics**: Queries Mapy.com Routing API to capture exact distances and travel times between consecutive stops across all parts.
 - **Optimization Modes**:
   - ⚡ **Fastest (`Fastest`)**: Minimizes travel time (`car_fast` or optional live traffic awareness `car_fast_traffic`).
   - 📏 **Shortest (`Shortest`)**: Minimizes physical distance (`car_short`).
@@ -156,7 +162,22 @@ For headless automation, CI/CD, or batch script pipelines, use `Invoke-MapyComRo
     -GenerateMap
 ```
 
-### 3. Batch File Processing
+### 3. Multi-Stop Route with Automatic Proportional Waypoint Splitting (> 15 Waypoints)
+```powershell
+.\Invoke-MapyComRoute.ps1 `
+    -StartPoint "Warszawa, Plac Defilad 1" `
+    -EndPoint "Wrocław, Rynek 1" `
+    -Waypoints @("Stop 1", "Stop 2", "Stop 3", ..., "Stop 22") `
+    -RouteType Fastest `
+    -GenerateMap
+# 24 total points automatically partitions into 2 balanced parts (13 & 12 points, legs differ by <= 1)
+# Output artifacts saved to Results folder:
+#   YYYYMMDD_HHMMSS_trasa_1_Warszawa_Wroclaw.png          -> Combined Overview Map (full polyline)
+#   YYYYMMDD_HHMMSS_trasa_1_Warszawa_Wroclaw_Part1of2.png -> Part 1 Sub-Route Map (auto-zoomed)
+#   YYYYMMDD_HHMMSS_trasa_1_Warszawa_Wroclaw_Part2of2.png -> Part 2 Sub-Route Map (auto-zoomed)
+```
+
+### 4. Batch File Processing
 ```powershell
 .\Invoke-MapyComRoute.ps1 `
     -InputFile ".\Samples\routes_sample.xlsx" `
@@ -168,7 +189,7 @@ For headless automation, CI/CD, or batch script pipelines, use `Invoke-MapyComRo
 
 ## Compilation to Standalone Executable (.EXE)
 
-The project includes an automated PS2EXE compilation script: [`Build-Exe.ps1`](file:///D:/Skrypty/GoogleMapsRoutes%20%E2%80%94%20kopia/Build-Exe.ps1).
+The project includes an automated PS2EXE compilation script: [`Build-Exe.ps1`](file:///d:/Skrypty/MapyComRoutes/Build-Exe.ps1).
 
 ```powershell
 # Compile universal MapyComRoutes.exe:
@@ -184,24 +205,22 @@ The project includes an automated PS2EXE compilation script: [`Build-Exe.ps1`](f
 
 | File / Directory | Description |
 | :--- | :--- |
-| [`MapyComRoutes-GUI.ps1`](file:///D:/Skrypty/GoogleMapsRoutes%20%E2%80%94%20kopia/MapyComRoutes-GUI.ps1) | Primary WPF application entry point (Manual & Batch processing). |
-| [`GoogleMapsRoutes-GUI.ps1`](file:///D:/Skrypty/GoogleMapsRoutes%20%E2%80%94%20kopia/GoogleMapsRoutes-GUI.ps1) | Backwards-compatible launch redirect to `MapyComRoutes-GUI.ps1`. |
-| [`RouteMapFunctions.ps1`](file:///D:/Skrypty/GoogleMapsRoutes%20%E2%80%94%20kopia/RouteMapFunctions.ps1) | Core engine module (Mapy.com Geocoding, Routing, Static Maps, GPX/KML, GDI+ canvas). |
-| [`Invoke-MapyComRoute.ps1`](file:///D:/Skrypty/GoogleMapsRoutes%20%E2%80%94%20kopia/Invoke-MapyComRoute.ps1) | Full-featured CLI automation and pipeline script. |
-| [`Invoke-GoogleMapsRoute.ps1`](file:///D:/Skrypty/GoogleMapsRoutes%20%E2%80%94%20kopia/Invoke-GoogleMapsRoute.ps1) | Backwards-compatible CLI wrapper redirecting to `Invoke-MapyComRoute.ps1`. |
-| [`Build-Exe.ps1`](file:///D:/Skrypty/GoogleMapsRoutes%20%E2%80%94%20kopia/Build-Exe.ps1) | PS2EXE build script for compiling standalone executables. |
-| [`localization.json`](file:///D:/Skrypty/GoogleMapsRoutes%20%E2%80%94%20kopia/localization.json) | External multi-language dictionary (English, Deutsch, Polski). |
-| [`Modules/AppConfig.ps1`](file:///D:/Skrypty/GoogleMapsRoutes%20%E2%80%94%20kopia/Modules/AppConfig.ps1) | App configuration, overlay preferences, DPAPI credential protection. |
-| [`Modules/AppXaml.ps1`](file:///D:/Skrypty/GoogleMapsRoutes%20%E2%80%94%20kopia/Modules/AppXaml.ps1) | Modern WPF XAML layout templates, control bindings, and theme styles. |
-| [`Modules/AsyncWorkers.ps1`](file:///D:/Skrypty/GoogleMapsRoutes%20%E2%80%94%20kopia/Modules/AsyncWorkers.ps1) | Background runspaces for asynchronous batch and manual calculation. |
-| [`Modules/UiBatchTab.ps1`](file:///D:/Skrypty/GoogleMapsRoutes%20%E2%80%94%20kopia/Modules/UiBatchTab.ps1) | Batch processing controller, DataGrid editing, multi-point grouping, and report dispatch. |
-| [`Modules/UiManualTab.ps1`](file:///D:/Skrypty/GoogleMapsRoutes%20%E2%80%94%20kopia/Modules/UiManualTab.ps1) | Manual route tab controller, address search, waypoint ordering, and map preview. |
-| [`Modules/UiSettingsTab.ps1`](file:///D:/Skrypty/GoogleMapsRoutes%20%E2%80%94%20kopia/Modules/UiSettingsTab.ps1) | Settings tab controller, API key verification, overlay customizer, theme switching. |
-| [`Modules/InteractiveMap.ps1`](file:///D:/Skrypty/GoogleMapsRoutes%20%E2%80%94%20kopia/Modules/InteractiveMap.ps1) | Interactive Leaflet/OSM HTML map rendering and browser viewer. |
-| [`Modules/ReportPdf.ps1`](file:///D:/Skrypty/GoogleMapsRoutes%20%E2%80%94%20kopia/Modules/ReportPdf.ps1) | PDF executive dossier generator with embedded route KPI cards and map imagery. |
-| [`Process-SchoolTransportRoutes-GUI.ps1`](file:///D:/Skrypty/GoogleMapsRoutes%20%E2%80%94%20kopia/Process-SchoolTransportRoutes-GUI.ps1) | Dedicated school transport contract processing GUI (Mapy.com enabled). |
-| [`Process-SchoolTransportRoutes.ps1`](file:///D:/Skrypty/GoogleMapsRoutes%20%E2%80%94%20kopia/Process-SchoolTransportRoutes.ps1) | Dedicated CLI school transport contract processor. |
-| [`ImplementMapy.md`](file:///D:/Skrypty/GoogleMapsRoutes%20%E2%80%94%20kopia/ImplementMapy.md) | Technical architecture and implementation migration plan. |
+| [`MapyComRoutes-GUI.ps1`](file:///d:/Skrypty/MapyComRoutes/MapyComRoutes-GUI.ps1) | Primary WPF application entry point (Manual & Batch processing). |
+| [`RouteMapFunctions.ps1`](file:///d:/Skrypty/MapyComRoutes/RouteMapFunctions.ps1) | Core engine module (Mapy.com Geocoding, Routing, Static Maps, GPX/KML, GDI+ canvas, `Split-RoutePoints`, `GoogleMapsPolylineCodec`). |
+| [`Invoke-MapyComRoute.ps1`](file:///d:/Skrypty/MapyComRoutes/Invoke-MapyComRoute.ps1) | Full-featured CLI automation and pipeline script with multi-part map rendering. |
+| [`Build-Exe.ps1`](file:///d:/Skrypty/MapyComRoutes/Build-Exe.ps1) | PS2EXE build script for compiling standalone executables. |
+| [`localization.json`](file:///d:/Skrypty/MapyComRoutes/localization.json) | External multi-language dictionary (English, Deutsch, Polski) with 100% key parity. |
+| [`Tests/Test-RouteSplitting.ps1`](file:///d:/Skrypty/MapyComRoutes/Tests/Test-RouteSplitting.ps1) | Automated regression test suite for waypoint splitting, polyline codec, and localization catalog. |
+| [`Modules/AppConfig.ps1`](file:///d:/Skrypty/MapyComRoutes/Modules/AppConfig.ps1) | App configuration, overlay preferences, DPAPI credential protection. |
+| [`Modules/AppXaml.ps1`](file:///d:/Skrypty/MapyComRoutes/Modules/AppXaml.ps1) | Modern WPF XAML layout templates, control bindings, and theme styles. |
+| [`Modules/AsyncWorkers.ps1`](file:///d:/Skrypty/MapyComRoutes/Modules/AsyncWorkers.ps1) | Background runspaces for asynchronous batch and manual calculation with sub-route map rendering. |
+| [`Modules/UiBatchTab.ps1`](file:///d:/Skrypty/MapyComRoutes/Modules/UiBatchTab.ps1) | Batch processing controller, DataGrid editing, multi-point grouping, and report dispatch. |
+| [`Modules/UiManualTab.ps1`](file:///d:/Skrypty/MapyComRoutes/Modules/UiManualTab.ps1) | Manual route tab controller, address search, waypoint ordering up to 200 stops, and map preview. |
+| [`Modules/UiSettingsTab.ps1`](file:///d:/Skrypty/MapyComRoutes/Modules/UiSettingsTab.ps1) | Settings tab controller, API key verification, overlay customizer, theme switching. |
+| [`Modules/InteractiveMap.ps1`](file:///d:/Skrypty/MapyComRoutes/Modules/InteractiveMap.ps1) | Interactive Leaflet/OSM HTML map rendering and browser viewer. |
+| [`Modules/ReportPdf.ps1`](file:///d:/Skrypty/MapyComRoutes/Modules/ReportPdf.ps1) | PDF executive dossier generator with embedded route KPI cards and map imagery. |
+| [`Process-SchoolTransportRoutes-GUI.ps1`](file:///d:/Skrypty/MapyComRoutes/Process-SchoolTransportRoutes-GUI.ps1) | Dedicated school transport contract processing GUI (Mapy.com enabled). |
+| [`Process-SchoolTransportRoutes.ps1`](file:///d:/Skrypty/MapyComRoutes/Process-SchoolTransportRoutes.ps1) | Dedicated CLI school transport contract processor. |
 
 ---
 
