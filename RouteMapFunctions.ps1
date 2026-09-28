@@ -17,10 +17,12 @@
       - Test-MapyApiKey : Non-blocking API key validity verification
       - Get-AddressCoordinates : Address geocoding via Mapy.com Geocoding API
       - Get-GeocodeStatusDescription : Detailed geocode accuracy and fallback status resolver
-      - Get-CarRouteData : Route calculation via Mapy.com Routing API (Fastest, Shortest, multipoint)
+      - Get-CarRouteData : Route calculation via Mapy.com Routing API (Fastest, Shortest, multipoint, auto-split)
+      - Split-RoutePoints : Proportional route splitter for routes exceeding Mapy.com waypoint limits
+      - ConvertTo-EncodedPolyline / ConvertFrom-EncodedPolyline : High-performance polyline encoder and decoder
       - Get-MapyComUrl : Navigation URL generator for Mapy.com in web browser
       - Save-RouteMapPng : Map image retrieval via Mapy.com Static Maps API with markers and overlay banners
-      - Import-RouteDataFile : Universal route data loader for JSON, CSV, and Excel (XLSX, XLS)
+      - Import-RouteDataFile : Universal route data loader for JSON, CSV, and Excel (XLSX, XLS) with auto-split
       - Export-RouteResults : Universal route and waypoint exporter for Excel, CSV, and JSON
 
 .NOTES
@@ -600,6 +602,135 @@ function Get-GeocodeStatusDescription {
 
 <#
 .SYNOPSIS
+    Splits a multi-point route sequence into N proportional parts with at most 17 points per part.
+.DESCRIPTION
+    The Mapy.com Routing REST API supports at most 15 intermediate waypoints per query,
+    which corresponds to a total of 17 points (1 origin + up to 15 waypoints + 1 destination).
+    When a route contains more than 17 total points (or > 15 intermediate waypoints),
+    Split-RoutePoints partitions the route into N proportional parts so that:
+      1. Each part contains at most MaxPointsPerPart (default: 17 points / 16 legs).
+      2. The distribution of legs (steps) between parts is as even and proportional as possible.
+      3. For continuous routing, the endpoint of part k is preserved as the start point of part k+1.
+.PARAMETER Points
+    Array of all route points (addresses, strings, or coordinate objects) from start to finish.
+.PARAMETER StartPoint
+    Start point / origin address or coordinate object.
+.PARAMETER EndPoint
+    Destination / end point address or coordinate object.
+.PARAMETER Waypoints
+    Array of intermediate waypoints.
+.PARAMETER MaxPointsPerPart
+    Maximum total points allowed in a single part (default: 17 = 1 start + 15 waypoints + 1 end).
+.OUTPUTS
+    [PSCustomObject[]] Array of split parts, each containing PartIndex, TotalParts, Start, End,
+    Waypoints, WaypointsCount, AllPoints, PointsCount, LegsCount, StartIndex, and EndIndex.
+.EXAMPLE
+    # Split 24 points in half (Part 1: 13 points / 12 legs, Part 2: 12 points / 11 legs)
+    $parts = Split-RoutePoints -Points (1..24)
+.EXAMPLE
+    # Split using Start, End, and Waypoints
+    $parts = Split-RoutePoints -StartPoint "Origin" -EndPoint "Dest" -Waypoints $listOf22Stops
+#>
+function Split-RoutePoints {
+    [CmdletBinding(DefaultParameterSetName = 'AllPoints')]
+    param(
+        [Parameter(Mandatory = $true, ParameterSetName = 'AllPoints', Position = 0)]
+        [object[]]$Points,
+
+        [Parameter(Mandatory = $true, ParameterSetName = 'Endpoints', Position = 0)]
+        [object]$StartPoint,
+
+        [Parameter(Mandatory = $true, ParameterSetName = 'Endpoints', Position = 1)]
+        [object]$EndPoint,
+
+        [Parameter(Mandatory = $false, ParameterSetName = 'Endpoints')]
+        [object[]]$Waypoints = @(),
+
+        [Parameter(Mandatory = $false)]
+        [ValidateRange(2, 100)]
+        [int]$MaxPointsPerPart = 17
+    )
+
+    $all = if ($PSCmdlet.ParameterSetName -eq 'Endpoints') {
+        $list = [System.Collections.Generic.List[object]]::new()
+        if ($null -ne $StartPoint) { $list.Add($StartPoint) }
+        if ($null -ne $Waypoints) {
+            foreach ($w in $Waypoints) {
+                if ($null -ne $w -and (-not ($w -is [string]) -or -not [string]::IsNullOrWhiteSpace($w))) {
+                    $list.Add($w)
+                }
+            }
+        }
+        if ($null -ne $EndPoint) { $list.Add($EndPoint) }
+        @($list)
+    }
+    else {
+        @($Points | Where-Object { $null -ne $_ -and (-not ($_ -is [string]) -or -not [string]::IsNullOrWhiteSpace($_)) })
+    }
+
+    $P = $all.Count
+    if ($P -lt 2) {
+        Write-Warning "Split-RoutePoints requires at least 2 valid points (start and end)."
+        return @()
+    }
+
+    $maxLegs = [int][math]::Max(1, $MaxPointsPerPart - 1)
+    $totalLegs = $P - 1
+    $N = [int][math]::Ceiling($totalLegs / [double]$maxLegs)
+
+    if ($N -le 1) {
+        $singleWaypoints = if ($P -gt 2) { @($all[1..($P - 2)]) } else { @() }
+        return ,@(
+            [PSCustomObject]@{
+                PartIndex      = 1
+                TotalParts     = 1
+                StartIndex     = 0
+                EndIndex       = $P - 1
+                Start          = $all[0]
+                End            = $all[$P - 1]
+                Waypoints      = $singleWaypoints
+                WaypointsCount = $singleWaypoints.Count
+                AllPoints      = $all
+                PointsCount    = $P
+                LegsCount      = $totalLegs
+            }
+        )
+    }
+
+    $baseLegs = [int][math]::Floor($totalLegs / [double]$N)
+    $remainder = $totalLegs % $N
+    $splits = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $curStart = 0
+
+    for ($i = 0; $i -lt $N; $i++) {
+        $legs = $baseLegs + $(if ($i -lt $remainder) { 1 } else { 0 })
+        $curEnd = $curStart + $legs
+        $partPts = @($all[$curStart..$curEnd])
+        $partWp = if ($legs -gt 1) { @($all[($curStart + 1)..($curEnd - 1)]) } else { @() }
+
+        $splits.Add([PSCustomObject]@{
+            PartIndex      = $i + 1
+            TotalParts     = $N
+            StartIndex     = $curStart
+            EndIndex       = $curEnd
+            Start          = $all[$curStart]
+            End            = $all[$curEnd]
+            Waypoints      = $partWp
+            WaypointsCount = $partWp.Count
+            AllPoints      = $partPts
+            PointsCount    = $partPts.Count
+            LegsCount      = $legs
+        })
+
+        # Crucial: the splitted endpoint is the next start point
+        $curStart = $curEnd
+    }
+
+    return ,@($splits)
+}
+
+<#
+.SYNOPSIS
     Calculates driving route geometry and travel metrics using the Mapy.com Routing REST API.
 .DESCRIPTION
     Builds an HTTP request against api.mapy.cz/v1/routing/route using lon,lat coordinate ordering.
@@ -653,6 +784,85 @@ function Get-CarRouteData {
         [Parameter()][switch]$AvoidTolls,
         [Parameter()][switch]$AvoidHighways
     )
+
+    # If intermediate waypoints exceed Mapy.com API limit (15 waypoints max per request),
+    # automatically split into N proportional parts with at most 17 points (15 waypoints) each.
+    $wpCount = if ($null -ne $IntermediatePoints) { @($IntermediatePoints).Count } else { 0 }
+    if ($wpCount -gt 15) {
+        Write-Verbose "Intermediate points count ($wpCount) exceeds Mapy.com single-route limit (15). Auto-splitting into proportional sub-routes..."
+        $originObj = [PSCustomObject]@{ Latitude = $OriginLat; Longitude = $OriginLng }
+        $destObj   = [PSCustomObject]@{ Latitude = $DestLat; Longitude = $DestLng }
+        $parts = Split-RoutePoints -StartPoint $originObj -EndPoint $destObj -Waypoints $IntermediatePoints -MaxPointsPerPart 17
+
+        $partResults = [System.Collections.Generic.List[PSCustomObject]]::new()
+        $allLegs = [System.Collections.Generic.List[PSCustomObject]]::new()
+        $allDecodedPoints = [System.Collections.Generic.List[object]]::new()
+        $totalKm = 0.0
+        $totalSec = 0.0
+        $allOk = $true
+        $firstErr = $null
+
+        foreach ($part in $parts) {
+            $pStartLat = [double]$part.Start.Latitude
+            $pStartLng = [double]$part.Start.Longitude
+            $pDestLat  = [double]$part.End.Latitude
+            $pDestLng  = [double]$part.End.Longitude
+            $pWaypoints = @($part.Waypoints)
+
+            $subRes = Get-CarRouteData -OriginLat $pStartLat -OriginLng $pStartLng `
+                -DestLat $pDestLat -DestLng $pDestLng `
+                -ApiKey $ApiKey -IntermediatePoints $pWaypoints `
+                -RouteType $RouteType -LanguageCode $LanguageCode -Units $Units `
+                -TrafficAware:$TrafficAware -AvoidTolls:$AvoidTolls -AvoidHighways:$AvoidHighways
+
+            $partResults.Add($subRes)
+
+            if ($subRes.Status -ne 'OK') {
+                $allOk = $false
+                if (-not $firstErr) { $firstErr = $subRes.ErrorMessage }
+            }
+            else {
+                if ($null -ne $subRes.OdlegloscKm) { $totalKm += [double]$subRes.OdlegloscKm }
+                if ($null -ne $subRes.DurationSeconds) { $totalSec += [double]$subRes.DurationSeconds }
+                if ($subRes.Legs) {
+                    foreach ($l in $subRes.Legs) { $allLegs.Add($l) }
+                }
+                if ($subRes.EncodedPolyline) {
+                    $decoded = ConvertFrom-EncodedPolyline -EncodedPolyline $subRes.EncodedPolyline
+                    if ($decoded) {
+                        foreach ($pt in $decoded) { $allDecodedPoints.Add($pt) }
+                    }
+                }
+            }
+        }
+
+        $combinedPolyline = if ($allDecodedPoints.Count -gt 0) {
+            ConvertTo-EncodedPolyline -Points $allDecodedPoints
+        }
+        else {
+            $null
+        }
+
+        $totalKm = [math]::Round($totalKm, 2)
+        $totalMin = [math]::Round($totalSec / 60.0, 0)
+
+        return [PSCustomObject]@{
+            OdlegloscKm     = if ($allOk) { $totalKm } else { $null }
+            CzasMin         = if ($allOk) { $totalMin } else { $null }
+            DurationSeconds = if ($allOk) { $totalSec } else { $null }
+            EncodedPolyline = $combinedPolyline
+            RouteType       = $RouteType
+            RouteLabels     = @()
+            Legs            = @($allLegs)
+            AvoidTolls      = [bool]$AvoidTolls
+            AvoidHighways   = [bool]$AvoidHighways
+            Status          = if ($allOk) { 'OK' } else { "ERROR" }
+            ErrorMessage    = $firstErr
+            Parts           = @($partResults)
+            IsSplit         = $true
+            TotalParts      = $parts.Count
+        }
+    }
 
     # Map route type to Mapy.com routeType enum
     $mapyRouteType = switch ($RouteType) {
@@ -1939,19 +2149,41 @@ function Import-RouteDataFile {
             }
 
             if ($grpStops.Count -ge 2) {
-                $StartPoint = $grpStops[0].Address
-                $EndPoint = $grpStops[$grpStops.Count - 1].Address
-                $Waypoints = if ($grpStops.Count -gt 2) { @($grpStops[1..($grpStops.Count - 2)] | ForEach-Object { $_.Address }) } else { @() }
-                $RouteObj = [PSCustomObject]@{
-                    Id          = [string]$grpIdx
-                    Name        = $grpRouteName
-                    Start       = $StartPoint
-                    End         = $EndPoint
-                    Waypoints   = $Waypoints
-                    RouteType   = 'Fastest'
-                    OriginalRow = $orderedRows
+                if ($grpStops.Count -gt 17) {
+                    $splits = Split-RoutePoints -Points $grpStops -MaxPointsPerPart 17
+                    foreach ($sp in $splits) {
+                        $spWaypoints = if ($sp.Waypoints.Count -gt 0) { @($sp.Waypoints | ForEach-Object { $_.Address }) } else { @() }
+                        $RouteObj = [PSCustomObject]@{
+                            Id          = "$grpIdx.$($sp.PartIndex)"
+                            Name        = "$grpRouteName (Part $($sp.PartIndex)/$($sp.TotalParts))"
+                            Start       = $sp.Start.Address
+                            End         = $sp.End.Address
+                            Waypoints   = $spWaypoints
+                            RouteType   = 'Fastest'
+                            OriginalRow = @($sp.AllPoints | ForEach-Object { $_.Raw })
+                            PartIndex   = $sp.PartIndex
+                            TotalParts  = $sp.TotalParts
+                        }
+                        $RoutesList.Add($RouteObj)
+                    }
                 }
-                $RoutesList.Add($RouteObj)
+                else {
+                    $StartPoint = $grpStops[0].Address
+                    $EndPoint = $grpStops[$grpStops.Count - 1].Address
+                    $Waypoints = if ($grpStops.Count -gt 2) { @($grpStops[1..($grpStops.Count - 2)] | ForEach-Object { $_.Address }) } else { @() }
+                    $RouteObj = [PSCustomObject]@{
+                        Id          = [string]$grpIdx
+                        Name        = $grpRouteName
+                        Start       = $StartPoint
+                        End         = $EndPoint
+                        Waypoints   = $Waypoints
+                        RouteType   = 'Fastest'
+                        OriginalRow = $orderedRows
+                        PartIndex   = 1
+                        TotalParts  = 1
+                    }
+                    $RoutesList.Add($RouteObj)
+                }
             }
             $grpIdx++
         }
@@ -2032,15 +2264,35 @@ function Import-RouteDataFile {
             }
         }
 
-        $NormalizedRoutes.Add([PSCustomObject]@{
-            Id          = [string]$idx
-            Name        = $nameVal
-            Start       = $startVal.Trim()
-            End         = $endVal.Trim()
-            Waypoints   = @($waypointsList)
-            RouteType   = $typeVal
-            OriginalRow = $row
-        })
+        if ($waypointsList.Count -gt 15) {
+            $splits = Split-RoutePoints -StartPoint $startVal.Trim() -EndPoint $endVal.Trim() -Waypoints @($waypointsList) -MaxPointsPerPart 17
+            foreach ($sp in $splits) {
+                $NormalizedRoutes.Add([PSCustomObject]@{
+                    Id          = "$idx.$($sp.PartIndex)"
+                    Name        = "$nameVal (Part $($sp.PartIndex)/$($sp.TotalParts))"
+                    Start       = $sp.Start
+                    End         = $sp.End
+                    Waypoints   = @($sp.Waypoints)
+                    RouteType   = $typeVal
+                    OriginalRow = $row
+                    PartIndex   = $sp.PartIndex
+                    TotalParts  = $sp.TotalParts
+                })
+            }
+        }
+        else {
+            $NormalizedRoutes.Add([PSCustomObject]@{
+                Id          = [string]$idx
+                Name        = $nameVal
+                Start       = $startVal.Trim()
+                End         = $endVal.Trim()
+                Waypoints   = @($waypointsList)
+                RouteType   = $typeVal
+                OriginalRow = $row
+                PartIndex   = 1
+                TotalParts  = 1
+            })
+        }
         $idx++
     }
 
@@ -2223,9 +2475,10 @@ function Export-RouteResults {
 # 8. ENCODED POLYLINE DECODING & GPS EXPORTERS (GPX / KML)
 # ==============================================================================
 
-if (-not ([System.Management.Automation.PSTypeName]'GoogleMapsPolylineDecoder').Type) {
+if (-not ([System.Management.Automation.PSTypeName]'GoogleMapsPolylineCodec').Type) {
     Add-Type -TypeDefinition @"
 using System;
+using System.Collections;
 using System.Collections.Generic;
 
 public class GoogleMapsPoint {
@@ -2237,7 +2490,7 @@ public class GoogleMapsPoint {
     }
 }
 
-public static class GoogleMapsPolylineDecoder {
+public static class GoogleMapsPolylineCodec {
     public static List<GoogleMapsPoint> Decode(string encoded) {
         var points = new List<GoogleMapsPoint>();
         if (string.IsNullOrEmpty(encoded)) return points;
@@ -2271,6 +2524,43 @@ public static class GoogleMapsPolylineDecoder {
         }
         return points;
     }
+
+    public static string Encode(IEnumerable points) {
+        if (points == null) return "";
+        var str = new System.Text.StringBuilder();
+        int lastLat = 0, lastLng = 0;
+        foreach (object item in points) {
+            if (item == null) continue;
+            GoogleMapsPoint pt = item as GoogleMapsPoint;
+            if (pt == null) continue;
+            double lat = pt.Latitude;
+            double lng = pt.Longitude;
+            int iLat = (int)Math.Round(lat * 1e5);
+            int iLng = (int)Math.Round(lng * 1e5);
+            int dLat = iLat - lastLat;
+            int dLng = iLng - lastLng;
+            EncodeSignedNumber(dLat, str);
+            EncodeSignedNumber(dLng, str);
+            lastLat = iLat;
+            lastLng = iLng;
+        }
+        return str.ToString();
+    }
+
+    private static void EncodeSignedNumber(int num, System.Text.StringBuilder str) {
+        int sgn_num = num < 0 ? ~(num << 1) : (num << 1);
+        while (sgn_num >= 0x20) {
+            str.Append((char)((0x20 | (sgn_num & 0x1f)) + 63));
+            sgn_num >>= 5;
+        }
+        str.Append((char)(sgn_num + 63));
+    }
+}
+
+public static class GoogleMapsPolylineDecoder {
+    public static List<GoogleMapsPoint> Decode(string encoded) {
+        return GoogleMapsPolylineCodec.Decode(encoded);
+    }
 }
 "@ -ErrorAction SilentlyContinue
 }
@@ -2279,7 +2569,7 @@ public static class GoogleMapsPolylineDecoder {
 .SYNOPSIS
     Decodes a Google/Mapy.cz encoded polyline string into an array of latitude/longitude coordinates.
 .DESCRIPTION
-    Uses the compiled .NET GoogleMapsPolylineDecoder class to decode ASCII-encoded
+    Uses the compiled .NET GoogleMapsPolylineCodec class to decode ASCII-encoded
     polyline strings with 5-decimal precision into GoogleMapsPoint objects with
     Latitude and Longitude properties.
 .PARAMETER EncodedPolyline
@@ -2295,11 +2585,42 @@ function ConvertFrom-EncodedPolyline {
     param([Parameter(Mandatory = $true)][string]$EncodedPolyline)
     if ([string]::IsNullOrWhiteSpace($EncodedPolyline)) { return @() }
     try {
-        # Delegate polyline decoding to compiled C# routine for microsecond speed
+        if (([System.Management.Automation.PSTypeName]'GoogleMapsPolylineCodec').Type) {
+            return [GoogleMapsPolylineCodec]::Decode($EncodedPolyline)
+        }
         return [GoogleMapsPolylineDecoder]::Decode($EncodedPolyline)
     }
     catch {
         return @()
+    }
+}
+
+<#
+.SYNOPSIS
+    Encodes an array or list of coordinate points into a Google/Mapy.cz ASCII polyline string.
+.DESCRIPTION
+    Uses the compiled .NET GoogleMapsPolylineCodec class to encode coordinate points with 5-decimal
+    precision into an ASCII-encoded polyline string.
+.PARAMETER Points
+    Array or collection of GoogleMapsPoint objects containing Latitude and Longitude.
+.OUTPUTS
+    [string] Encoded ASCII polyline string.
+.EXAMPLE
+    $encoded = ConvertTo-EncodedPolyline -Points $points
+#>
+function ConvertTo-EncodedPolyline {
+    [Alias('ConvertTo-GoogleEncodedPolyline')]
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][object[]]$Points)
+    if ($null -eq $Points -or @($Points).Count -eq 0) { return '' }
+    try {
+        if (([System.Management.Automation.PSTypeName]'GoogleMapsPolylineCodec').Type) {
+            return [GoogleMapsPolylineCodec]::Encode($Points)
+        }
+        return ''
+    }
+    catch {
+        return ''
     }
 }
 

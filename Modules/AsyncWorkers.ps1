@@ -44,9 +44,10 @@ function New-WorkerPowerShell {
             'Protect-SecretString', 'Unprotect-SecretString', 'Test-GoogleApiKey', 'Test-MapyApiKey',
             'Invoke-MapyRestJson',
             'Get-AddressComponentValue', 'Get-AddressCoordinates', 'Get-GeocodeStatusDescription',
-            'Get-CarRouteData', 'Get-GoogleMapsUrl', 'Get-MapyComUrl', 'Get-WrappedLines', 'Save-RouteMapPng',
+            'Get-CarRouteData', 'Split-RoutePoints', 'Get-GoogleMapsUrl', 'Get-MapyComUrl', 'Get-WrappedLines', 'Save-RouteMapPng',
             'Find-MatchingPropertyName', 'Import-RouteDataFile', 'Export-RouteResults',
-            'ConvertFrom-GoogleEncodedPolyline', 'ConvertFrom-EncodedPolyline', 'Export-RouteGpx', 'Export-RouteKml',
+            'ConvertFrom-GoogleEncodedPolyline', 'ConvertFrom-EncodedPolyline', 'ConvertTo-GoogleEncodedPolyline', 'ConvertTo-EncodedPolyline',
+            'Export-RouteGpx', 'Export-RouteKml',
             'Get-EstimatedApiCost'
         )
     } | ForEach-Object {
@@ -166,6 +167,9 @@ $script:ManualCalcAsync = {
             & $wlog "Routes API error: $($trasa.Status). $($trasa.ErrorMessage)" "WARN"
             return [PSCustomObject]@{ Success = $false; Error = "Routes API error: $($trasa.Status). $($trasa.ErrorMessage)" }
         }
+        if ($trasa.IsSplit) {
+            & $wlog "Route automatically split into $($trasa.TotalParts) proportional parts (max 17 points per part)." "INFO"
+        }
         & $wlog "Routes API route found: $($trasa.OdlegloscKm) km, $($trasa.CzasMin) min" "INFO"
 
         # 5. Attach individual leg metrics to waypoints
@@ -222,6 +226,43 @@ $script:ManualCalcAsync = {
         & $wlog "Map rendering complete. Saved: $saved" "INFO"
         $resolvedMapPath = $(if ($saved) { $mapPath } else { $null })
 
+        # If route was split into N parts, generate individual maps for each part as well
+        $partMapPaths = [System.Collections.Generic.List[string]]::new()
+        if ($trasa.IsSplit -and $geoWp.Count -gt 15 -and $trasa.Parts) {
+            $splitParts = Split-RoutePoints -StartPoint $geoStart -EndPoint $geoEnd -Waypoints $geoWp -MaxPointsPerPart 17
+            for ($sp = 0; $sp -lt $splitParts.Count; $sp++) {
+                $pObj = $splitParts[$sp]
+                $subRes = if ($sp -lt $trasa.Parts.Count) { $trasa.Parts[$sp] } else { $null }
+                if ($subRes -and $subRes.EncodedPolyline) {
+                    $pMapFileName = "${ts}_manual_route_${safeName}_Part$($pObj.PartIndex)of$($pObj.TotalParts).png"
+                    $pMapPath = Join-Path $outDir $pMapFileName
+                    $pAllPts = [System.Collections.Generic.List[PSCustomObject]]::new()
+                    foreach ($pt in $pObj.AllPoints) { $pAllPts.Add($pt) }
+
+                    $pSaved = Save-RouteMapPng -EncodedPolyline $subRes.EncodedPolyline `
+                        -OriginLat $pObj.Start.Latitude -OriginLng $pObj.Start.Longitude `
+                        -DestLat $pObj.End.Latitude -DestLng $pObj.End.Longitude `
+                        -RoutePoints $pAllPts -OutputPath $pMapPath -ApiKey $apiKey `
+                        -Width 900 -Height 600 `
+                        -AddressTextA $pObj.Start.FormattedAddress -AddressTextB $pObj.End.FormattedAddress `
+                        -DistanceText "$($subRes.OdlegloscKm) km" -DurationText "$($subRes.CzasMin) min" `
+                        -HeaderLeftText "$name (Part $($pObj.PartIndex)/$($pObj.TotalParts))" -HeaderRightText $headerRightText `
+                        -LanguageCode $languageCode `
+                        -StartRaw $pObj.Start.FormattedAddress -StartGeocoded $pObj.Start.FormattedAddress `
+                        -EndRaw $pObj.End.FormattedAddress -EndGeocoded $pObj.End.FormattedAddress `
+                        -WaypointsList $pObj.Waypoints -RouteName "$name (Part $($pObj.PartIndex)/$($pObj.TotalParts))" -RouteType $headerRightText `
+                        -Legs $subRes.Legs `
+                        -OverlayConfig $overlayConfigJson
+
+                    if ($pSaved) {
+                        $partMapPaths.Add($pMapPath)
+                        $staticCount++
+                        & $wlog "Saved sub-route map part $($pObj.PartIndex)/$($pObj.TotalParts): $pMapPath" "INFO"
+                    }
+                }
+            }
+        }
+
         # Return full calculation package to UI dispatcher
         return [PSCustomObject]@{
             Success         = $true
@@ -232,6 +273,9 @@ $script:ManualCalcAsync = {
             MapyComUrl      = $gUrl
             GoogleMapsUrl   = $gUrl
             MapPath         = $resolvedMapPath
+            PartMapPaths    = @($partMapPaths)
+            IsSplit         = [bool]$trasa.IsSplit
+            TotalParts      = $(if ($trasa.IsSplit) { $trasa.TotalParts } else { 1 })
             OriginLat       = $geoStart.Latitude
             OriginLng       = $geoStart.Longitude
             OriginAddress   = $geoStart.FormattedAddress

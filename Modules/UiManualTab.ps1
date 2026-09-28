@@ -218,8 +218,8 @@ function Register-UiManualTabEvents {
     $btnAddWp.Add_Click({
         $wp = $txtNewWp.Text.Trim()
         if (-not [string]::IsNullOrWhiteSpace($wp)) {
-            if ($lstWp.Items.Count -ge 25) {
-                [System.Windows.MessageBox]::Show((Get-LocText 'MsgMaxWaypoints' 'Maximum 25 waypoints allowed.'), (Get-LocText 'MsgMaxWaypointsTitle' 'Waypoints Limit'), 'OK', 'Warning')
+            if ($lstWp.Items.Count -ge 200) {
+                [System.Windows.MessageBox]::Show((Get-LocText 'MsgMaxWaypoints' 'Maximum 200 waypoints allowed.'), (Get-LocText 'MsgMaxWaypointsTitle' 'Waypoints Limit'), 'OK', 'Warning')
                 return
             }
             $null = $lstWp.Items.Add($wp)

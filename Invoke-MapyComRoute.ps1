@@ -21,7 +21,7 @@
     Address or latitude/longitude coordinates of destination.
 
 .PARAMETER Waypoints
-    Array of addresses or coordinates for intermediate stops (up to 25 waypoints).
+    Array of addresses or coordinates for intermediate stops. If more than 15 intermediate waypoints are provided, the route is automatically split into N proportional parts (max 17 points per part).
 
 .PARAMETER Name
     Descriptive name or label for manual route.
@@ -236,6 +236,16 @@ if ($PSCmdlet.ParameterSetName -eq 'Manual') {
         -IntermediatePoints $GeocodedWaypoints -RouteType $ActualRouteType `
         -EmissionType $EmissionType -ApiKey $ApiKey -TrafficAware:$TrafficAware
 
+    # Inform user if route was split
+    if ($GeocodedWaypoints.Count -gt 15) {
+        $splits = Split-RoutePoints -StartPoint $GeoStart -EndPoint $GeoEnd -Waypoints $GeocodedWaypoints -MaxPointsPerPart 17
+        Write-Host "`n[Auto-Split] Liczba punktów ($($GeocodedWaypoints.Count + 2)) przekracza limit API (17 punktów)." -ForegroundColor Yellow
+        Write-Host "  Automatyczny proporcjonalny podział na $($splits.Count) części:" -ForegroundColor Yellow
+        foreach ($sp in $splits) {
+            Write-Host "    Część $($sp.PartIndex)/$($sp.TotalParts): $($sp.PointsCount) punktów ($($sp.WaypointsCount) pośrednich)" -ForegroundColor Gray
+        }
+    }
+
     if ($Trasa.Status -ne 'OK') {
         throw "Błąd obliczania trasy: $($Trasa.Status). $($Trasa.ErrorMessage)"
     }
@@ -271,7 +281,38 @@ if ($PSCmdlet.ParameterSetName -eq 'Manual') {
             -Legs $Trasa.Legs
 
         if ($MapSaved) {
-            Write-Host "  Mapa PNG : $MapPath" -ForegroundColor Cyan
+            Write-Host "  Mapa PNG (Całość) : $MapPath" -ForegroundColor Cyan
+        }
+
+        # If route was split into N parts, generate individual maps for each part
+        $PartMapPaths = [System.Collections.Generic.List[string]]::new()
+        if ($GeocodedWaypoints.Count -gt 15 -and $Trasa.Parts) {
+            $splits = Split-RoutePoints -StartPoint $GeoStart -EndPoint $GeoEnd -Waypoints $GeocodedWaypoints -MaxPointsPerPart 17
+            for ($p = 0; $p -lt $splits.Count; $p++) {
+                $sp = $splits[$p]
+                $subRes = if ($p -lt $Trasa.Parts.Count) { $Trasa.Parts[$p] } else { $null }
+                if ($subRes -and $subRes.EncodedPolyline) {
+                    $pMapFileName = "${Timestamp}_${SafeName}_Part$($sp.PartIndex)of$($sp.TotalParts).png"
+                    $pMapPath = Join-Path $OutputFolder $pMapFileName
+                    $pAllPts = [System.Collections.Generic.List[PSCustomObject]]::new()
+                    foreach ($pt in $sp.AllPoints) { $pAllPts.Add($pt) }
+
+                    $pSaved = Save-RouteMapPng -EncodedPolyline $subRes.EncodedPolyline `
+                        -OriginLat $sp.Start.Latitude -OriginLng $sp.Start.Longitude `
+                        -DestLat $sp.End.Latitude -DestLng $sp.End.Longitude `
+                        -RoutePoints $pAllPts -OutputPath $pMapPath -ApiKey $ApiKey `
+                        -Width $MapWidth -Height $MapHeight `
+                        -AddressTextA $sp.Start.FormattedAddress -AddressTextB $sp.End.FormattedAddress `
+                        -DistanceText "$($subRes.OdlegloscKm) km" -DurationText "$($subRes.CzasMin) min" `
+                        -HeaderLeftText "$Name (Part $($sp.PartIndex)/$($sp.TotalParts))" -HeaderRightText "Typ: $ActualRouteType" `
+                        -Legs $subRes.Legs
+
+                    if ($pSaved) {
+                        Write-Host "  Mapa PNG (Część $($sp.PartIndex)/$($sp.TotalParts)) : $pMapPath" -ForegroundColor Cyan
+                        $PartMapPaths.Add($pMapPath)
+                    }
+                }
+            }
         }
     }
 
@@ -291,13 +332,17 @@ if ($PSCmdlet.ParameterSetName -eq 'Manual') {
         KoniecGeokodowany= $GeoEnd.FormattedAddress
         KoniecKoordynaty = "$($GeoEnd.Latitude), $($GeoEnd.Longitude)"
         LiczbaPrzystankow= $GeocodedWaypoints.Count
+        LiczbaCzesci     = $(if ($Trasa.IsSplit) { $Trasa.TotalParts } else { 1 })
+        Podzial          = $(if ($Trasa.IsSplit) { "$($Trasa.TotalParts) części" } else { "1 część" })
         TypTrasy         = $ActualRouteType
         OdlegloscKm      = $Trasa.OdlegloscKm
         CzasMin          = $Trasa.CzasMin
         MapaPath         = $MapPath
+        MapyCzesci       = @($PartMapPaths)
         MapyComUrl       = $MapyComUrl
         GoogleMapsUrl    = $MapyComUrl
         Status           = 'OK'
+        Czesci           = $Trasa.Parts
     }
 
     return $ResultObj
